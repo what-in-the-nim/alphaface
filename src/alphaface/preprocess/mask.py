@@ -3,89 +3,61 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-# MediaPipe FaceMesh face-oval contour indices (subset of the 468-point mesh).
-_FACE_OVAL = [
-    10,
-    338,
-    297,
-    332,
-    284,
-    251,
-    389,
-    356,
-    454,
-    323,
-    361,
-    288,
-    397,
-    365,
-    379,
-    378,
-    400,
-    377,
-    152,
-    148,
-    176,
-    149,
-    150,
-    136,
-    172,
-    58,
-    132,
-    93,
-    234,
-    127,
-    162,
-    21,
-    54,
-    103,
-    67,
-    109,
-]
+from .align import AlignedFace
+
+# 68-point landmark layout (dlib/ibug convention, as returned by insightface buffalo_l):
+#   0-16  jaw contour (left outer → chin → right outer)
+#   17-21 left eyebrow  (inner → outer)
+#   22-26 right eyebrow (inner → outer)
+#   27-30 nose bridge
+#   31-35 nose base
+#   36-41 left eye
+#   42-47 right eye
+#   48-67 mouth
+
+
+def _face_polygon(lm: np.ndarray, size: int) -> np.ndarray:
+    """Build a face-covering polygon from 68 landmarks.
+
+    The polygon follows the jaw contour along the bottom and sides, then
+    connects across an estimated forehead boundary above the eyebrows.
+    """
+    jaw = lm[0:17]  # left outer → chin (8) → right outer
+
+    left_brow = lm[17:22]  # inner → outer
+    right_brow = lm[22:27]  # inner → outer
+
+    # Push brows upward to cover forehead.
+    # Use vertical distance from chin to nose-bridge as reference.
+    chin_y = lm[8, 1]
+    bridge_y = lm[27, 1]
+    dy = max((chin_y - bridge_y) * 0.45, 20.0)
+
+    # Forehead arc: right outer → right inner (reversed brow) then
+    # left inner → left outer, all shifted upward.
+    right_top = right_brow[::-1].copy()  # outer(26) → inner(22)
+    right_top[:, 1] -= dy
+
+    left_top = left_brow.copy()  # inner(17) → outer(21)
+    left_top[:, 1] -= dy
+
+    polygon = np.vstack([jaw, right_top, left_top])
+    return np.clip(polygon, 0, size - 1).astype(np.int32)
 
 
 class FaceMasker:
-    """Generate a binary face mask from an aligned face image using MediaPipe FaceMesh.
+    """Generate a binary face mask from an AlignedFace.
+
+    Uses the 68-point landmarks already computed during alignment —
+    no extra model or library needed beyond insightface.
 
     Output convention: face pixels = 0, background = 255.
-    This matches the dataloader which applies ``1 - mask`` before computing loss.
-
-    Requires: pip install mediapipe
-    No external checkpoint download needed.
+    This matches the dataloader which applies ``1 - mask`` before loss.
     """
 
-    def __init__(self) -> None:
-        import mediapipe as mp
-
-        self._face_mesh = mp.solutions.face_mesh.FaceMesh(
-            static_image_mode=True,
-            max_num_faces=1,
-            refine_landmarks=True,
-            min_detection_confidence=0.5,
-        )
-
-    def __call__(self, image_bgr: np.ndarray) -> np.ndarray | None:
-        """Return a uint8 HW mask or None if no face is detected."""
-        h, w = image_bgr.shape[:2]
-        rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-        result = self._face_mesh.process(rgb)
-        if not result.multi_face_landmarks:
-            return None
-
-        lm = result.multi_face_landmarks[0].landmark
-        oval_pts = np.array(
-            [[int(lm[i].x * w), int(lm[i].y * h)] for i in _FACE_OVAL],
-            dtype=np.int32,
-        )
+    def __call__(self, face: AlignedFace) -> np.ndarray:
+        h, w = face.image.shape[:2]
+        polygon = _face_polygon(face.landmarks_68, min(h, w))
         mask = np.full((h, w), 255, dtype=np.uint8)
-        cv2.fillPoly(mask, [oval_pts], 0)
+        cv2.fillPoly(mask, [polygon], 0)
         return mask
-
-    def close(self) -> None:
-        self._face_mesh.close()
-
-    def __enter__(self) -> FaceMasker:
-        return self
-
-    def __exit__(self, *_: object) -> None:
-        self.close()

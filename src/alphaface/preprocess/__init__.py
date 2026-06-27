@@ -1,5 +1,5 @@
-from .align import FaceAligner
+from .align import AlignedFace, FaceAligner
 from .caption import FaceCaptioner
 from .mask import FaceMasker
 
-__all__ = ["FaceAligner", "FaceMasker", "FaceCaptioner"]
+__all__ = ["AlignedFace", "FaceAligner", "FaceMasker", "FaceCaptioner"]

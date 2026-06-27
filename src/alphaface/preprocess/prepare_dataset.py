@@ -75,46 +75,37 @@ def run(
     written = skipped = 0
     global_idx = 0
 
-    try:
-        for image_path in tqdm(images, desc="Preprocessing", unit="img"):
-            bgr = cv2.imread(str(image_path))
-            if bgr is None:
-                log.warning("Cannot read %s — skipped", image_path)
-                skipped += 1
-                continue
+    for image_path in tqdm(images, desc="Preprocessing", unit="img"):
+        bgr = cv2.imread(str(image_path))
+        if bgr is None:
+            log.warning("Cannot read %s — skipped", image_path)
+            skipped += 1
+            continue
 
-            faces: list = (
-                [aligner.align_largest(bgr, output_size)] if largest_only else aligner.align_all(bgr, output_size)
-            )
-            faces = [f for f in faces if f is not None]
+        aligned_faces = (
+            [aligner.align_largest(bgr, output_size)] if largest_only else aligner.align_all(bgr, output_size)
+        )
+        aligned_faces = [f for f in aligned_faces if f is not None]
 
-            if not faces:
-                log.debug("No face detected in %s", image_path)
-                skipped += 1
-                continue
+        if not aligned_faces:
+            log.debug("No face detected in %s", image_path)
+            skipped += 1
+            continue
 
-            for face in faces:
-                stem = _output_stem(input_dir, image_path, global_idx)
-                global_idx += 1
+        for af in aligned_faces:
+            stem = _output_stem(input_dir, image_path, global_idx)
+            global_idx += 1
 
-                cv2.imwrite(str(img_dir / f"{stem}.png"), face)
+            cv2.imwrite(str(img_dir / f"{stem}.png"), af.image)
 
-                if masker is not None:
-                    face_mask = masker(face)
-                    if face_mask is not None:
-                        cv2.imwrite(str(mask_dir / f"{stem}.png"), face_mask)
-                    else:
-                        log.debug("Mask failed for %s", image_path)
+            if masker is not None:
+                cv2.imwrite(str(mask_dir / f"{stem}.png"), masker(af))
 
-                if captioner is not None:
-                    caption = captioner(face)
-                    (txt_dir / f"{stem}.txt").write_text(caption + "\n", encoding="utf-8")
+            if captioner is not None:
+                caption = captioner(af.image)
+                (txt_dir / f"{stem}.txt").write_text(caption + "\n", encoding="utf-8")
 
-                written += 1
-
-    finally:
-        if masker is not None:
-            masker.close()
+            written += 1
 
     log.info("Finished — written: %d  skipped (no face / unreadable): %d", written, skipped)
     log.info("Dataset saved to %s", output_dir)
