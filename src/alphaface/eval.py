@@ -5,17 +5,12 @@ import os
 from collections.abc import Iterable
 from pathlib import Path
 
-import numpy as np
 import torch
 import torchvision.transforms as transforms
 from PIL import Image
 from torch import nn
-from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR
 from torch.utils.tensorboard import SummaryWriter
-from torchvision.utils import make_grid
-from tqdm import tqdm
 
-from .dataset.get_dataloader import get_dataloader
 from .models.swapper_alphaface import AlphaFace, build_AlphaFace
 from .utils.utils_config import get_config
 from .utils.utils_distributed_sampler import setup_seed

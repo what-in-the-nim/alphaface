@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
-
 import numpy as np
 import pytorch_lightning as pl
 import torch
@@ -10,7 +8,6 @@ from torch import nn
 
 from ..backbones import get_model
 from .arcface_resnet import resnet50
-from .iresnet import iresnet100
 from .swapper_units_adin import Decoder, Discriminator, Encoder, Encoder_noBNIN, VGGPerceptualLoss
 
 batch_size = 1

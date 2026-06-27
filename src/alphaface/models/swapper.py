@@ -1,16 +1,12 @@
 from __future__ import annotations
 
-from typing import Optional
-
 import numpy as np
 import pytorch_lightning as pl
 import torch
-from omegaconf import OmegaConf
 from torch import nn
 
 from ..backbones import get_model
-from .arcface_resnet import resnet50, resnet_face18
-from .iresnet import iresnet100
+from .arcface_resnet import resnet50
 from .swapper_units import (
     Decoder,
     Decoder_Enlarge,

@@ -7,14 +7,11 @@ import threading
 from collections.abc import Callable
 from functools import partial
 from glob import glob
-from typing import Optional
 
 import numpy as np
 import torch
-import torchvision.transforms as T
 import torchvision.transforms.functional as TF
 from PIL import Image
-from torch import distributed
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 
