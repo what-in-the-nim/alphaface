@@ -1,0 +1,31 @@
+# AlphaFace
+
+To run AlphaFace Demo, please conduct the following instruction.
+
+## Training
+
+1. Install requirement 
+  ```
+  pip install -r requirement.txt
+  ```
+2. Run `train_clip.sh`
+
+
+## Demo
+
+1. Download model file from this [link](https://drive.google.com/file/d/18ZOQB3WmIFnMwi1GqBroFFEOuSNKWpZQ/view?usp=sharing) and put it in the project root directory.
+2. Download arcface model from this [link](https://drive.google.com/file/d/1qc4s6eRQPluma72WFibUnw74GPMAYRtY/view?usp=drive_link) and put it in the `models` directory. 
+- You may can change the configuration of model file path (config.model_path) in 'config/alphaface_eval_demo.py'
+3. Run `eval.sh`
+
+* We only provide data samples for training and evaluation demo (256 triplets of image, mask, and text)
+
+
+```bibtex
+@article{yu2026alphaface,
+  title={AlphaFace: High Fidelity and Real-time Face Swapper Robust to Facial Pose},
+  author={Yu, Jongmin and Oh, Hyeontaek and Sun, Zhongtian and Aviles-Rivero, Angelica I and Jeon, Moongu and Yang, Jinhong},
+  journal={arXiv preprint arXiv:2601.16429},
+  year={2026}
+}
+```
