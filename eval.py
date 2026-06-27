@@ -3,14 +3,14 @@ import pdb
 
 import matplotlib.pyplot as plt
 import torch
-from Models.Swapper_AlphaFace import build_AlphaFace
+from models.swapper_alphaface import build_AlphaFace
 from utils.utils_config import get_config
 from utils.utils_distributed_sampler import setup_seed
 import os
 from dataset.get_dataloader import get_dataloader
 import torchvision.transforms as transforms
 from PIL import Image
-from Objectives.Loss import *
+from objectives.loss import *
 from torchvision.utils import make_grid
 from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR
 from torch.utils.tensorboard import SummaryWriter
