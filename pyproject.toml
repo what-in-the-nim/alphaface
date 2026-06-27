@@ -35,6 +35,7 @@ build-backend = "hatchling.build"
 [project.scripts]
 alphaface-eval = "alphaface.eval:main"
 alphaface-train = "alphaface.train_clip:main"
+alphaface-prepare-dataset = "alphaface.preprocess.prepare_dataset:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/alphaface"]
@@ -43,6 +44,12 @@ packages = ["src/alphaface"]
 dev = [
     "pre-commit",
     "ruff",
+]
+preprocess = [
+    "insightface>=0.7",
+    "onnxruntime>=1.16",
+    "mediapipe>=0.10",
+    "transformers>=4.35",
 ]
 
 [tool.ruff]
