@@ -5,13 +5,21 @@ from typing import Optional
 import numpy as np
 import pytorch_lightning as pl
 import torch
-from omegaconf import DictConfig
+from omegaconf import OmegaConf
 from torch import nn
 
-from backbones import get_model
-from models.arcface_resnet import resnet50
-from models.iresnet import iresnet100
-from models.swapper_units_adin import Decoder, Discriminator, Encoder, Encoder_noBNIN, VGGPerceptualLoss
+from ..backbones import get_model
+from .arcface_resnet import resnet50, resnet_face18
+from .iresnet import iresnet100
+from .swapper_units import (
+    Decoder,
+    Decoder_Enlarge,
+    Decoder_Enlarge_for_onnx,
+    Discriminator,
+    Encoder,
+    Encoder_noBNIN,
+    VGGPerceptualLoss,
+)
 
 batch_size = 1
 
@@ -23,9 +31,7 @@ class Normalize(nn.Module):
         self.std = std
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x - self.mean
-        x = x / self.std
-        return x
+        return (x - self.mean) / self.std
 
 
 class ResNet_ID_encoder(pl.LightningModule):
@@ -46,6 +52,37 @@ class ResNet_ID_encoder(pl.LightningModule):
         return torch.div(x, torch.linalg.norm(x, dim=1, keepdim=True))
 
 
+class Swapper_Enlarge(nn.Module):
+    def __init__(self, source_dim: int, exist_BN: bool = True) -> None:
+        super(Swapper_Enlarge, self).__init__()
+        self.source_dim = source_dim
+        self.E = Encoder(self.source_dim) if exist_BN else Encoder_noBNIN(self.source_dim)
+        self.G = Decoder_Enlarge(1024, 3)
+        self.dis: Optional[Discriminator] = None
+        self.train_adv: Optional[bool] = None
+
+    def forward(
+        self, target: torch.Tensor, source: torch.Tensor, get_latent: bool = False
+    ) -> torch.Tensor | tuple[torch.Tensor, list[torch.Tensor]]:
+        output = self.E(target, source)
+        if get_latent:
+            return self.G(output, get_latent=True)
+        return self.G(output)
+
+
+class Swapper_Enlarge_for_onnx(nn.Module):
+    def __init__(self, source_dim: int, exist_BN: bool = True) -> None:
+        super(Swapper_Enlarge_for_onnx, self).__init__()
+        self.source_dim = source_dim
+        self.E = Encoder(self.source_dim) if exist_BN else Encoder_noBNIN(self.source_dim)
+        self.G = Decoder_Enlarge_for_onnx(1024, 3)
+        self.dis: Optional[Discriminator] = None
+        self.train_adv: Optional[bool] = None
+
+    def forward(self, target: torch.Tensor, source: torch.Tensor) -> torch.Tensor:
+        return self.G(self.E(target, source))
+
+
 class Swapper(nn.Module):
     def __init__(self, source_dim: int, exist_BN: bool = True) -> None:
         super(Swapper, self).__init__()
@@ -64,9 +101,9 @@ class Swapper(nn.Module):
         return self.G(output)
 
 
-class AlphaFace(pl.LightningModule):
+class Doppelganger(pl.LightningModule):
     def __init__(self, swapper: Swapper, id_encoder: nn.Module, fine_tune: bool = False) -> None:
-        super(AlphaFace, self).__init__()
+        super(Doppelganger, self).__init__()
         self.Swapper = swapper.cuda()
         self.fine_tune = fine_tune
         self.Id_encoder = id_encoder.cuda()
@@ -79,7 +116,7 @@ class AlphaFace(pl.LightningModule):
         self.train_adv = True
 
     def Preparing_VGG_percet_loss(self) -> None:
-        self.feats_extractor = VGGPerceptualLoss(layer_ids=(3, 8, 15, 22)).cuda()
+        self.feats_extractor = VGGPerceptualLoss(layer_ids=[3, 8, 15, 22]).cuda()
 
     def set_grads(self) -> None:
         for param in self.Swapper.parameters():
@@ -120,25 +157,64 @@ class AlphaFace(pl.LightningModule):
         return self.Swapper(target, source, get_latent=get_latent)
 
     def add_batch_instant_norm2swapper(self) -> None:
-        bn_layer = nn.BatchNorm2d(1024)
-        in_layer = nn.InstanceNorm2d(1024, affine=True)
         self.Swapper.E.Encoder["layer_3"] = nn.Sequential(
             self.Swapper.E.Encoder["layer_3"],
-            bn_layer,
-            in_layer,
+            nn.BatchNorm2d(1024),
+            nn.InstanceNorm2d(1024, affine=True),
         )
         for i in range(5):
             setattr(self.Swapper.E, f"batch_norm_{i}", nn.BatchNorm2d(1024))
             setattr(self.Swapper.E, f"instance_norm_{i}", nn.InstanceNorm2d(1024, affine=True))
 
 
-def build_AlphaFace(
-    config: Optional[DictConfig] = None,
+def build_arch(
+    fine_tune: bool = False,
+    exist_BN: bool = True,
+    enlarge: bool = False,
+    new_id_model: bool = False,
+) -> Doppelganger:
+    swapper: nn.Module
+    if enlarge:
+        swapper = Swapper_Enlarge_for_onnx(512)
+    else:
+        swapper = Swapper(512, exist_BN)
+    swapper = swapper.cuda()
+
+    if not new_id_model:
+        id_encoder: nn.Module = ResNet_ID_encoder(ema_path="./models/emp.npy")
+        id_encoder.resnet.load_state_dict(  # type: ignore[attr-defined]
+            torch.load("./models/arcface_w600k_r50_pytorch.pt", map_location=torch.device("cuda"))
+        )
+    else:
+        weight = torch.load("./vit_b_fr_pgair.pt")
+        id_encoder = get_model("vit_b", dropout=0, fp16=False).cuda()
+        id_encoder.load_state_dict(weight)
+
+    return Doppelganger(swapper, id_encoder, fine_tune=fine_tune)
+
+
+def build_models(
+    config=None,
     fine_tune: bool = False,
     adv_train: bool = True,
+    exist_BN: bool = True,
+    enlarge: bool = False,
     new_id_model: bool = False,
-) -> AlphaFace:
-    swapper = Swapper(512)
+    from_scretch: bool = False,
+) -> Doppelganger:
+    if enlarge:
+        swapper: nn.Module = Swapper_Enlarge(512)
+        if not from_scretch:
+            print("Loading pre-trained model for the swapper")
+            swapper.load_state_dict(torch.load("./models/MMNet.pt", weights_only=True), strict=False)
+    else:
+        swapper = Swapper(512, exist_BN)
+        if not from_scretch:
+            print("Loading pre-trained model for the swapper")
+            swapper.load_state_dict(torch.load("./models/MMNet.pt"), strict=False)
+
+    swapper = swapper.cuda()
+
     print("Loading pre-trained model for the ID encoder")
     if not new_id_model:
         id_encoder: nn.Module = ResNet_ID_encoder(ema_path="./models/emp.npy")
@@ -146,13 +222,16 @@ def build_AlphaFace(
             torch.load("./models/arcface_w600k_r50_pytorch.pt", map_location=torch.device("cuda"))
         )
     else:
-        assert config is not None
         weight = torch.load(config.id_network_path)
         id_encoder = get_model(config.id_network, dropout=0, fp16=False).cuda()
         id_encoder.load_state_dict(weight)
 
-    model = AlphaFace(swapper, id_encoder, fine_tune=fine_tune)
+    dpg = Doppelganger(swapper, id_encoder, fine_tune=fine_tune)
     if adv_train:
-        model.Prepareing_adversrial_learning(img_size=256, max_conv_size=512)
-        model.Preparing_VGG_percet_loss()
-    return model
+        dpg.Prepareing_adversrial_learning(img_size=256, max_conv_size=512)
+        dpg.Preparing_VGG_percet_loss()
+    return dpg
+
+
+if __name__ == "__main__":
+    build_models()

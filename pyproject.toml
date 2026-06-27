@@ -32,8 +32,12 @@ dependencies = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[project.scripts]
+alphaface-eval = "alphaface.eval:main"
+alphaface-train = "alphaface.train_clip:main"
+
 [tool.hatch.build.targets.wheel]
-packages = ["models", "objectives", "dataset", "utils", "backbones", "configs"]
+packages = ["src/alphaface"]
 
 [tool.uv.sources]
 torch = { index = "pytorch" }

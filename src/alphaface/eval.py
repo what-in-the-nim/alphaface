@@ -15,11 +15,11 @@ from torch.utils.tensorboard import SummaryWriter
 from torchvision.utils import make_grid
 from tqdm import tqdm
 
-from dataset.get_dataloader import get_dataloader
-from models.swapper_alphaface import AlphaFace, build_AlphaFace
-from objectives.loss import *
-from utils.utils_config import get_config
-from utils.utils_distributed_sampler import setup_seed
+from .dataset.get_dataloader import get_dataloader
+from .models.swapper_alphaface import AlphaFace, build_AlphaFace
+from .objectives.loss import *
+from .utils.utils_config import get_config
+from .utils.utils_distributed_sampler import setup_seed
 
 
 def list_images(

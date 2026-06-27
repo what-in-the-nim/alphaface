@@ -14,9 +14,9 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torchvision.utils import make_grid
 
-from dataset.get_dataloader import get_dataloader_clip
-from models.swapper_alphaface import AlphaFace, build_AlphaFace
-from objectives.loss import (
+from .dataset.get_dataloader import get_dataloader_clip
+from .models.swapper_alphaface import AlphaFace, build_AlphaFace
+from .objectives.loss import (
     clip_text_loss,
     identity_loss,
     identity_score,
@@ -24,8 +24,8 @@ from objectives.loss import (
     multi_scale_adversarial_loss,
     reconstruction_loss,
 )
-from utils.utils_config import get_config
-from utils.utils_distributed_sampler import setup_seed
+from .utils.utils_config import get_config
+from .utils.utils_distributed_sampler import setup_seed
 
 
 def normalize_by_127_5(img: torch.Tensor) -> torch.Tensor:

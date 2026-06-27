@@ -17,7 +17,7 @@ from torch import distributed
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 
-from utils.utils_distributed_sampler import DistributedSampler, get_dist_info, worker_init_fn
+from ..utils.utils_distributed_sampler import DistributedSampler, get_dist_info, worker_init_fn
 
 
 def normalize_by_127_5(img: torch.Tensor) -> torch.Tensor:
