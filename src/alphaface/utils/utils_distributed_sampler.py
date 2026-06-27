@@ -88,7 +88,6 @@ class DistributedSampler(_DistributedSampler):
         shuffle=True,
         seed=0,
     ):
-
         super().__init__(dataset, num_replicas=num_replicas, rank=rank, shuffle=shuffle)
 
         # In distributed sampling, different ranks should sample
@@ -114,9 +113,7 @@ class DistributedSampler(_DistributedSampler):
 
         # add extra samples to make it evenly divisible
         # in case that indices is shorter than half of total_size
-        indices = (indices * math.ceil(self.total_size / len(indices)))[
-            : self.total_size
-        ]
+        indices = (indices * math.ceil(self.total_size / len(indices)))[: self.total_size]
         assert len(indices) == self.total_size
 
         # subsample

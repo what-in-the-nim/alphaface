@@ -3,7 +3,6 @@ from __future__ import annotations
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from pytorch_msssim import ssim
 
 
@@ -119,7 +118,7 @@ def masked_attribute_preservation_loss(
 
 class PerceptualLoss(nn.Module):
     def __init__(self, feature_extractor: nn.Module) -> None:
-        super(PerceptualLoss, self).__init__()
+        super().__init__()
         self.feature_extractor = feature_extractor
         for param in self.feature_extractor.parameters():
             param.requires_grad = False

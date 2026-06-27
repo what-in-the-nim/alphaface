@@ -34,7 +34,7 @@ config.weight_decay = 5e-4
 # config.weight_decay = 0.1
 
 # For log
-config.log_output = 'tmp'
+config.log_output = "tmp"
 
 config.verbose = 2000
 config.frequent = 10
@@ -60,4 +60,4 @@ config.wandb_entity = "entity"
 config.wandb_project = "project"
 config.wandb_log_all = True
 config.save_artifacts = False
-config.wandb_resume = False # resume wandb run: Only if the you wand t resume the last run that it was interrupted
+config.wandb_resume = False  # resume wandb run: Only if the you wand t resume the last run that it was interrupted

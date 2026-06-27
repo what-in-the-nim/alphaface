@@ -4,9 +4,10 @@ import os
 import queue as Queue
 import random
 import threading
+from collections.abc import Callable
 from functools import partial
 from glob import glob
-from typing import Callable, Optional
+from typing import Optional
 
 import numpy as np
 import torch
@@ -36,9 +37,7 @@ def get_img_list(path: str) -> list[str]:
     return files
 
 
-def synchronized_horizontal_flip_manual(
-    image1: Image.Image, image2: Image.Image
-) -> tuple[Image.Image, Image.Image]:
+def synchronized_horizontal_flip_manual(image1: Image.Image, image2: Image.Image) -> tuple[Image.Image, Image.Image]:
     """Applies synchronized horizontal flip to both images."""
     if random.random() > 0.5:
         image1 = TF.hflip(image1)
@@ -47,7 +46,7 @@ def synchronized_horizontal_flip_manual(
 
 
 def load_text_from_file(txt_path: str) -> str:
-    with open(txt_path, "r", encoding="utf-8") as f:
+    with open(txt_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
@@ -59,8 +58,8 @@ class FaceImageDataset_ImageOnly(Dataset):
     def __init__(
         self,
         db_path: str,
-        t_transform: Optional[Callable] = None,
-        s_transform: Optional[Callable] = None,
+        t_transform: Callable | None = None,
+        s_transform: Callable | None = None,
     ) -> None:
         self.img_list = get_img_list(os.path.join(db_path, "img"))
         np.random.shuffle(self.img_list)
@@ -90,8 +89,8 @@ class FaceImageDataset_CLIP(Dataset):
     def __init__(
         self,
         db_path: str,
-        t_transform: Optional[Callable] = None,
-        s_transform: Optional[Callable] = None,
+        t_transform: Callable | None = None,
+        s_transform: Callable | None = None,
     ) -> None:
         self.img_list = get_img_list(os.path.join(db_path, "img"))
         self.mask_path = os.path.join(db_path, "mask")
@@ -104,9 +103,7 @@ class FaceImageDataset_CLIP(Dataset):
     def __len__(self) -> int:
         return self.num_sample
 
-    def __getitem__(
-        self, idx: int
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, str, str]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, str, str]:
         src_idx = random.randint(0, self.num_sample - 1)
         tar_idx = random.randint(0, self.num_sample - 1)
         while src_idx == tar_idx:
@@ -145,8 +142,8 @@ class FaceImageDataset(Dataset):
     def __init__(
         self,
         db_path: str,
-        t_transform: Optional[Callable] = None,
-        s_transform: Optional[Callable] = None,
+        t_transform: Callable | None = None,
+        s_transform: Callable | None = None,
     ) -> None:
         self.img_list = get_img_list(os.path.join(db_path, "img"))
         self.mask_path = os.path.join(db_path, "mask")
@@ -158,9 +155,7 @@ class FaceImageDataset(Dataset):
     def __len__(self) -> int:
         return self.num_sample
 
-    def __getitem__(
-        self, idx: int
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         src_idx = random.randint(0, self.num_sample - 1)
         tar_idx = random.randint(0, self.num_sample - 1)
         while src_idx == tar_idx:
@@ -190,15 +185,19 @@ class FaceImageDataset(Dataset):
 
 
 def _make_transforms() -> tuple[transforms.Compose, transforms.Compose]:
-    t_transform = transforms.Compose([
-        transforms.Resize((256, 256)),
-        transforms.ToTensor(),
-    ])
-    s_transform = transforms.Compose([
-        transforms.Resize((112, 112)),
-        transforms.ToTensor(),
-        transforms.Lambda(normalize_by_127_5),
-    ])
+    t_transform = transforms.Compose(
+        [
+            transforms.Resize((256, 256)),
+            transforms.ToTensor(),
+        ]
+    )
+    s_transform = transforms.Compose(
+        [
+            transforms.Resize((112, 112)),
+            transforms.ToTensor(),
+            transforms.Lambda(normalize_by_127_5),
+        ]
+    )
     return t_transform, s_transform
 
 
@@ -233,11 +232,13 @@ def get_dataloader_tmp(
     seed: int = 2048,
     num_workers: int = 2,
 ) -> DataLoaderX:
-    transform = transforms.Compose([
-        transforms.RandomHorizontalFlip(),
-        transforms.Resize((128, 128)),
-        transforms.ToTensor(),
-    ])
+    transform = transforms.Compose(
+        [
+            transforms.RandomHorizontalFlip(),
+            transforms.Resize((128, 128)),
+            transforms.ToTensor(),
+        ]
+    )
     train_set = FaceImageDataset(db_path, transform)
     rank, world_size = get_dist_info()
     train_sampler = DistributedSampler(train_set, num_replicas=world_size, rank=rank, shuffle=True, seed=seed)
@@ -256,7 +257,7 @@ def get_dataloader_tmp(
 
 class BackgroundGenerator(threading.Thread):
     def __init__(self, generator: DataLoader, local_rank: int, max_prefetch: int = 6) -> None:
-        super(BackgroundGenerator, self).__init__()
+        super().__init__()
         self.queue: Queue.Queue = Queue.Queue(max_prefetch)
         self.generator = generator
         self.local_rank = local_rank
@@ -284,12 +285,12 @@ class BackgroundGenerator(threading.Thread):
 
 class DataLoaderX(DataLoader):
     def __init__(self, local_rank: int, **kwargs: object) -> None:
-        super(DataLoaderX, self).__init__(**kwargs)
+        super().__init__(**kwargs)
         self.stream = torch.cuda.Stream(local_rank)
         self.local_rank = local_rank
 
     def __iter__(self) -> DataLoaderX:
-        self.iter = super(DataLoaderX, self).__iter__()
+        self.iter = super().__iter__()
         self.iter = BackgroundGenerator(self.iter, self.local_rank)
         self.preload()
         return self

@@ -18,7 +18,7 @@ batch_size = 1
 
 class Normalize(nn.Module):
     def __init__(self, mean: torch.Tensor, std: torch.Tensor) -> None:
-        super(Normalize, self).__init__()
+        super().__init__()
         self.mean = mean
         self.std = std
 
@@ -30,7 +30,7 @@ class Normalize(nn.Module):
 
 class ResNet_ID_encoder(pl.LightningModule):
     def __init__(self, ema_path: str) -> None:
-        super(ResNet_ID_encoder, self).__init__()
+        super().__init__()
         self.resnet = resnet50()
         self.ema = nn.Linear(512, 512)
         self.ema.weight.data = torch.nn.Parameter(torch.from_numpy(np.load(ema_path)).permute(1, 0)).cuda()
@@ -48,12 +48,12 @@ class ResNet_ID_encoder(pl.LightningModule):
 
 class Swapper(nn.Module):
     def __init__(self, source_dim: int, exist_BN: bool = True) -> None:
-        super(Swapper, self).__init__()
+        super().__init__()
         self.source_dim = source_dim
         self.E = Encoder(self.source_dim) if exist_BN else Encoder_noBNIN(self.source_dim)
         self.G = Decoder(1024, 3)
-        self.dis: Optional[Discriminator] = None
-        self.train_adv: Optional[bool] = None
+        self.dis: Discriminator | None = None
+        self.train_adv: bool | None = None
 
     def forward(
         self, target: torch.Tensor, source: torch.Tensor, get_latent: bool = False
@@ -66,13 +66,13 @@ class Swapper(nn.Module):
 
 class AlphaFace(pl.LightningModule):
     def __init__(self, swapper: Swapper, id_encoder: nn.Module, fine_tune: bool = False) -> None:
-        super(AlphaFace, self).__init__()
+        super().__init__()
         self.Swapper = swapper.cuda()
         self.fine_tune = fine_tune
         self.Id_encoder = id_encoder.cuda()
-        self.dis: Optional[Discriminator] = None
+        self.dis: Discriminator | None = None
         self.train_adv: bool = False
-        self.feats_extractor: Optional[VGGPerceptualLoss] = None
+        self.feats_extractor: VGGPerceptualLoss | None = None
 
     def Prepareing_adversrial_learning(self, img_size: int, max_conv_size: int) -> None:
         self.dis = Discriminator(img_size=img_size, max_conv_dim=max_conv_size).cuda()
@@ -91,7 +91,7 @@ class AlphaFace(pl.LightningModule):
                 param.requires_grad = True
 
     def save(self, fname: str, step: int) -> None:
-        print("Saving checkpoint into %s..." % fname)
+        print(f"Saving checkpoint into {fname}...")
         torch.save(self.Swapper.state_dict(), f"{fname}_swapper_{step}.pt")
         torch.save(self.Swapper.state_dict(), f"{fname}_swapper_last.pt")
         torch.save(self.Id_encoder.state_dict(), f"{fname}_idc_{step}.pt")
@@ -100,8 +100,8 @@ class AlphaFace(pl.LightningModule):
             torch.save(self.dis.state_dict(), f"{fname}_dis_{step}.pt")
             torch.save(self.dis.state_dict(), f"{fname}_dis_last.pt")
 
-    def load(self, fname: str, step: Optional[int] = None) -> None:
-        print("Loading checkpoint from %s..." % fname)
+    def load(self, fname: str, step: int | None = None) -> None:
+        print(f"Loading checkpoint from {fname}...")
         suffix = f"_{step}" if step is not None else "_last"
         self.Swapper.load_state_dict(torch.load(f"{fname}_swapper{suffix}.pt"))
         if self.dis is not None:
@@ -133,7 +133,7 @@ class AlphaFace(pl.LightningModule):
 
 
 def build_AlphaFace(
-    config: Optional[DictConfig] = None,
+    config: DictConfig | None = None,
     fine_tune: bool = False,
     adv_train: bool = True,
     new_id_model: bool = False,

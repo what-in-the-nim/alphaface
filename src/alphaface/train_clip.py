@@ -126,9 +126,7 @@ def train_with_clip(
                 img2_t, swapped_face_2_2
             )
 
-            loss_percept = fs_model.feats_extractor(img1_t, swapped_1_2) + fs_model.feats_extractor(
-                img2_t, swapped_2_1
-            )
+            loss_percept = fs_model.feats_extractor(img1_t, swapped_1_2) + fs_model.feats_extractor(img2_t, swapped_2_1)
 
             swapped_face_1_2_1 = fs_model(swapped_1_2, img1_s)
             swapped_face_2_1_2 = fs_model(swapped_2_1, img2_s)
@@ -136,18 +134,18 @@ def train_with_clip(
                 img2_t, swapped_face_2_1_2
             )
 
-            loss_masked_recon = masked_reconstruction_loss(
-                img1_t, swapped_1_2, mask1_t
-            ) + masked_reconstruction_loss(img2_t, swapped_2_1, mask2_t)
+            loss_masked_recon = masked_reconstruction_loss(img1_t, swapped_1_2, mask1_t) + masked_reconstruction_loss(
+                img2_t, swapped_2_1, mask2_t
+            )
 
             clip_t_loss_id = identity_loss(img2_1_features, img1_features) + identity_loss(
                 img1_2_features, img2_features
             )
             clip_score_1 = identity_score(img1_features, text1_features)
             clip_score_2 = identity_score(img2_features, text2_features)
-            clip_text2img_loss = clip_text_loss(
-                img2_1_features, text2_features, clip_score_2
-            ) + clip_text_loss(img1_2_features, text1_features, clip_score_1)
+            clip_text2img_loss = clip_text_loss(img2_1_features, text2_features, clip_score_2) + clip_text_loss(
+                img1_2_features, text1_features, clip_score_1
+            )
 
             if global_step <= config.adv_sess:
                 total_gen_loss = (
@@ -205,9 +203,13 @@ def train_with_clip(
                 dis_lr = dis_opt.param_groups[-1]["lr"]
                 gen_lr = swapper_opt.param_groups[-1]["lr"]
                 if global_step <= config.adv_sess:
-                    print(f"global step {global_step}, Generator Loss: {total_gen_loss.item()}, Discriminator Loss: Not applied")
+                    print(
+                        f"global step {global_step}, Generator Loss: {total_gen_loss.item()}, Discriminator Loss: Not applied"
+                    )
                 else:
-                    print(f"global step {global_step}, Generator Loss: {total_gen_loss.item()}, Discriminator Loss: {total_disc_loss.item()}")
+                    print(
+                        f"global step {global_step}, Generator Loss: {total_gen_loss.item()}, Discriminator Loss: {total_disc_loss.item()}"
+                    )
                 writer.add_scalar("0.Total_loss_for_swapper/train", total_gen_loss, global_step)
                 writer.add_scalar("1.Identity_loss/train", loss_id, global_step)
                 writer.add_scalar("2.Self_recon_loss/train", loss_self_rec, global_step)
@@ -215,7 +217,9 @@ def train_with_clip(
                 writer.add_scalar("4.2Cyclic_recon_loss/train", loss_2cycle_rec, global_step)
                 writer.add_scalar("5.Masked_recon_loss/train", loss_masked_recon, global_step)
                 writer.add_scalar("8.[Clip-learning] CLIP_ID Similarity loss/train", clip_t_loss_id, global_step)
-                writer.add_scalar("9.[Clip-learning] CLIP_img-text_contrastive_learning_loss/train", clip_text2img_loss, global_step)
+                writer.add_scalar(
+                    "9.[Clip-learning] CLIP_img-text_contrastive_learning_loss/train", clip_text2img_loss, global_step
+                )
                 writer.add_scalar("[-].Learning_rate_swapper/train", gen_lr, global_step)
                 if global_step > config.adv_sess:
                     writer.add_scalar("8.Adv_gen_Loss/train", loss_adv_gen, global_step)

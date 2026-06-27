@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import argparse
 import os
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 import numpy as np
 import torch
@@ -17,7 +17,6 @@ from tqdm import tqdm
 
 from .dataset.get_dataloader import get_dataloader
 from .models.swapper_alphaface import AlphaFace, build_AlphaFace
-from .objectives.loss import *
 from .utils.utils_config import get_config
 from .utils.utils_distributed_sampler import setup_seed
 
@@ -29,9 +28,11 @@ def list_images(
 ) -> list[Path]:
     """Return a sorted list of image files found in *directory*."""
     default_exts = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".gif", ".webp", ".ppm", ".pgm"}
-    exts = default_exts if extensions is None else {
-        (e.lower() if e.startswith(".") else f".{e.lower()}") for e in extensions
-    }
+    exts = (
+        default_exts
+        if extensions is None
+        else {(e.lower() if e.startswith(".") else f".{e.lower()}") for e in extensions}
+    )
     directory = Path(directory).expanduser().resolve()
     paths = directory.rglob("*") if recursive else directory.iterdir()
     return sorted(p for p in paths if p.is_file() and p.suffix.lower() in exts)
@@ -51,11 +52,11 @@ def tensor2img(tensor: torch.Tensor) -> torch.Tensor:
 
 
 def eval_alphaface(config: object, model: AlphaFace) -> None:
-    writer = SummaryWriter(config.tb_dir)  # type: ignore[attr-defined]
+    SummaryWriter(config.tb_dir)  # type: ignore[attr-defined]
 
     os.makedirs(config.output, exist_ok=True)  # type: ignore[attr-defined]
 
-    print("Resuming from checkpoint...from %s" % config.model_path)  # type: ignore[attr-defined]
+    print(f"Resuming from checkpoint...from {config.model_path}")  # type: ignore[attr-defined]
     dict_checkpoint = torch.load(config.model_path)  # type: ignore[attr-defined]
     model.Swapper.load_state_dict(dict_checkpoint["swapper"])
 
@@ -64,15 +65,19 @@ def eval_alphaface(config: object, model: AlphaFace) -> None:
     model.Swapper.eval()
     model.Id_encoder.eval()
 
-    t_transform = transforms.Compose([
-        transforms.Resize((256, 256)),
-        transforms.ToTensor(),
-    ])
-    s_transform = transforms.Compose([
-        transforms.Resize((112, 112)),
-        transforms.ToTensor(),
-        transforms.Lambda(normalize_by_127_5),
-    ])
+    t_transform = transforms.Compose(
+        [
+            transforms.Resize((256, 256)),
+            transforms.ToTensor(),
+        ]
+    )
+    s_transform = transforms.Compose(
+        [
+            transforms.Resize((112, 112)),
+            transforms.ToTensor(),
+            transforms.Lambda(normalize_by_127_5),
+        ]
+    )
 
     src_img_list = list_images(config.src_path)  # type: ignore[attr-defined]
     tar_img_list = list_images(config.tar_path)  # type: ignore[attr-defined]
@@ -108,9 +113,9 @@ def main(args: argparse.Namespace) -> None:
     setup_seed(seed=cfg.seed, cuda_deterministic=False)
 
     if cfg.tensorboard:
-        writer = SummaryWriter(cfg.tb_path)
+        SummaryWriter(cfg.tb_path)
     else:
-        writer = None
+        pass
     os.makedirs(cfg.log_dir, exist_ok=True)
 
     print("Preparing the student model")

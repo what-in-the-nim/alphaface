@@ -15,37 +15,37 @@ config.init_lr_dis = 1e-4
 config.verbose = 2000
 config.num_epoch = 100000
 config.warmup_epoch = 0
-config.savedir = 'Save4'
+config.savedir = "Save4"
 config.src_img_size = 112
 config.tar_img_size = 256
 config.visualize = True
 config.from_scretch = False
 
 config.optimizer = "adamw"
-config.db_path = './dataset/ffhq_lpff/256_small'
+config.db_path = "./dataset/ffhq_lpff/256_small"
 config.tensorboard = False
-config.tb_dir = './logs/swap_clip'
+config.tb_dir = "./logs/swap_clip"
 config.adv_sess = 200000
-#config.adv_sess = 20000
+# config.adv_sess = 20000
 config.lr_schedule_step = 20000
-#config.lr_schedule_step = 5000
+# config.lr_schedule_step = 5000
 
-#Config for Id encoder
-config.id_network_path = './vit_b_fr_pgair.pt'
-config.id_network = 'vit_b'
+# Config for Id encoder
+config.id_network_path = "./vit_b_fr_pgair.pt"
+config.id_network = "vit_b"
 
 
-#Config for saving
+# Config for saving
 config.resume = False
 config.model_path = None
-config.output = './Save/save_clip'
-#config.save_interval = 5000
+config.output = "./Save/save_clip"
+# config.save_interval = 5000
 config.save_interval = 25000
 
 # 25000
 
 
-#Config for balancing weights
+# Config for balancing weights
 config.w_id = 10.0
 config.w_self_rec = 0.5
 config.w_percept = 0.5

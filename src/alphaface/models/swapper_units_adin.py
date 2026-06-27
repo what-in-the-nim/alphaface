@@ -33,7 +33,7 @@ class Adaptive_instance_normalistaion(nn.Module):
 
 class Target_Adaptive_Identify_Feature_Feeding_Block(nn.Module):
     def __init__(self, output_dim: int, z_id_size: int = 512) -> None:
-        super(Target_Adaptive_Identify_Feature_Feeding_Block, self).__init__()
+        super().__init__()
         self.output_dim = output_dim
         self.z_id_size = z_id_size
         self.fc = nn.Linear(self.z_id_size, self.output_dim)
@@ -58,7 +58,7 @@ class Operation_Unit(nn.Module):
         identity_feature_in_dim: int = 512,
         act_out: bool = True,
     ) -> None:
-        super(Operation_Unit, self).__init__()
+        super().__init__()
         self.channel = channel
         self.act_out = act_out
         self.id_feature_out_dim = identity_feature_out_dim
@@ -90,7 +90,7 @@ class Operation_Unit(nn.Module):
 
 class Cross_Adaptive_Identity_Injdection_Block(nn.Module):
     def __init__(self, channel: int, identity_feature_out_dim: int, identity_feature_in_dim: int) -> None:
-        super(Cross_Adaptive_Identity_Injdection_Block, self).__init__()
+        super().__init__()
         self.channel = channel
         self.identity_feature_out_dim = identity_feature_out_dim
         self.identity_feature_in_dim = identity_feature_in_dim
@@ -115,7 +115,7 @@ class Cross_Adaptive_Identity_Injdection_Block(nn.Module):
 
 class Encoder_noBNIN(nn.Module):
     def __init__(self, id_feature_dim: int) -> None:
-        super(Encoder_noBNIN, self).__init__()
+        super().__init__()
         self.id_feature_dim = id_feature_dim
         self.Encoder_channel = [3, 128, 256, 512, 1024]
         self.Encoder_kernel_size = [7, 3, 3, 3]
@@ -151,7 +151,7 @@ class Encoder_noBNIN(nn.Module):
 
 class Encoder(nn.Module):
     def __init__(self, id_feature_dim: int) -> None:
-        super(Encoder, self).__init__()
+        super().__init__()
         self.id_feature_dim = id_feature_dim
         self.Encoder_channel = [3, 128, 256, 512, 1024]
         self.Encoder_kernel_size = [7, 3, 3, 3]
@@ -187,7 +187,7 @@ class Encoder(nn.Module):
 
 class Decoder(nn.Module):
     def __init__(self, in_channels: int = 1023, out_channels: int = 3) -> None:
-        super(Decoder, self).__init__()
+        super().__init__()
         self.in_channel = in_channels
         self.out_channel = out_channels
         self.Upsample = nn.Upsample(scale_factor=2, align_corners=False, mode="bilinear")
@@ -361,7 +361,6 @@ class VGGPerceptualLoss(nn.Module):
         feats_pred = self._extract_feats(pred)
         feats_tgt = self._extract_feats(target)
         losses = [
-            w * self.distance(f_p, f_t).mean(dim=[1, 2, 3])
-            for f_p, f_t, w in zip(feats_pred, feats_tgt, self.weights)
+            w * self.distance(f_p, f_t).mean(dim=[1, 2, 3]) for f_p, f_t, w in zip(feats_pred, feats_tgt, self.weights)
         ]
         return torch.stack(losses, dim=0).sum(dim=0).mean()
