@@ -5,10 +5,10 @@ import pdb
 import pytorch_lightning as pl
 from omegaconf import OmegaConf
 from torch import nn
-from Models.Swapper_Units_AdIN import Encoder, Discriminator, Decoder, Encoder_noBNIN, VGGPerceptualLoss
-from Models.arcface_resnet import resnet50
+from models.swapper_units_adin import Encoder, Discriminator, Decoder, Encoder_noBNIN, VGGPerceptualLoss
+from models.arcface_resnet import resnet50
 # from Model.MultiScaleDiscriminator import MultiscaleDiscriminator
-from Models.iresnet import iresnet100
+from models.iresnet import iresnet100
 from backbones import get_model
 import numpy as np
 
