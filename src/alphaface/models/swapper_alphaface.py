@@ -1,16 +1,13 @@
 from __future__ import annotations
 
 import numpy as np
-import pytorch_lightning as pl
 import torch
 from omegaconf import DictConfig
 from torch import nn
 
 from ..backbones import get_model
 from .arcface_resnet import resnet50
-from .swapper_units_adin import Decoder, Discriminator, Encoder, Encoder_noBNIN, VGGPerceptualLoss
-
-batch_size = 1
+from .swapper_units_adin import Decoder, Discriminator, Encoder, EncoderNoBNIN, VGGPerceptualLoss
 
 
 class Normalize(nn.Module):
@@ -25,12 +22,14 @@ class Normalize(nn.Module):
         return x
 
 
-class ResNet_ID_encoder(pl.LightningModule):
-    def __init__(self, ema_path: str) -> None:
+class ResNetIdEncoder(nn.Module):
+    def __init__(self, ema_path: str, device: str = "cpu") -> None:
         super().__init__()
+        # NOTE: `.resnet` and `.ema` attribute names are load-bearing — they map to the
+        # pretrained ArcFace checkpoint and emp.npy keys and must not be renamed.
         self.resnet = resnet50()
         self.ema = nn.Linear(512, 512)
-        self.ema.weight.data = torch.nn.Parameter(torch.from_numpy(np.load(ema_path)).permute(1, 0)).cuda()
+        self.ema.weight.data = torch.nn.Parameter(torch.from_numpy(np.load(ema_path)).permute(1, 0).to(device))
         self.ema.bias.data.fill_(0.0)
 
     def processing_ema_only(self, latent: torch.Tensor) -> torch.Tensor:
@@ -44,112 +43,113 @@ class ResNet_ID_encoder(pl.LightningModule):
 
 
 class Swapper(nn.Module):
-    def __init__(self, source_dim: int, exist_BN: bool = True) -> None:
+    def __init__(self, source_dim: int, exist_bn: bool = True, use_checkpoint: bool = False) -> None:
         super().__init__()
         self.source_dim = source_dim
-        self.E = Encoder(self.source_dim) if exist_BN else Encoder_noBNIN(self.source_dim)
-        self.G = Decoder(1024, 3)
-        self.dis: Discriminator | None = None
+        self.encoder = (
+            Encoder(self.source_dim, use_checkpoint=use_checkpoint)
+            if exist_bn
+            else EncoderNoBNIN(self.source_dim, use_checkpoint=use_checkpoint)
+        )
+        self.decoder = Decoder(1024, 3)
+        self.discriminator: Discriminator | None = None
         self.train_adv: bool | None = None
 
     def forward(
         self, target: torch.Tensor, source: torch.Tensor, get_latent: bool = False
     ) -> torch.Tensor | tuple[torch.Tensor, list[torch.Tensor]]:
-        output = self.E(target, source)
+        output = self.encoder(target, source)
         if get_latent:
-            return self.G(output, get_latent=True)
-        return self.G(output)
+            return self.decoder(output, get_latent=True)
+        return self.decoder(output)
 
 
-class AlphaFace(pl.LightningModule):
-    def __init__(self, swapper: Swapper, id_encoder: nn.Module, fine_tune: bool = False) -> None:
+class AlphaFace(nn.Module):
+    def __init__(self, swapper: Swapper, id_encoder: nn.Module, fine_tune: bool = False, device: str = "cpu") -> None:
         super().__init__()
-        self.Swapper = swapper.cuda()
+        self._device_str = device
+        self.swapper = swapper.to(device)
         self.fine_tune = fine_tune
-        self.Id_encoder = id_encoder.cuda()
-        self.dis: Discriminator | None = None
+        self.id_encoder = id_encoder.to(device)
+        self.discriminator: Discriminator | None = None
         self.train_adv: bool = False
-        self.feats_extractor: VGGPerceptualLoss | None = None
+        self.perceptual_loss: VGGPerceptualLoss | None = None
 
-    def Prepareing_adversrial_learning(self, img_size: int, max_conv_size: int) -> None:
-        self.dis = Discriminator(img_size=img_size, max_conv_dim=max_conv_size).cuda()
+    def prepare_adversarial_learning(self, img_size: int, max_conv_size: int) -> None:
+        self.discriminator = Discriminator(img_size=img_size, max_conv_dim=max_conv_size).to(self._device_str)
         self.train_adv = True
 
-    def Preparing_VGG_percet_loss(self) -> None:
-        self.feats_extractor = VGGPerceptualLoss(layer_ids=(3, 8, 15, 22)).cuda()
+    def prepare_vgg_perceptual_loss(self) -> None:
+        self.perceptual_loss = VGGPerceptualLoss(layer_ids=(3, 8, 15, 22)).to(self._device_str)
 
     def set_grads(self) -> None:
-        for param in self.Swapper.parameters():
+        for param in self.swapper.parameters():
             param.requires_grad = True
-        for param in self.Id_encoder.parameters():
+        for param in self.id_encoder.parameters():
             param.requires_grad = False
-        if self.train_adv and self.dis is not None:
-            for param in self.dis.parameters():
+        if self.train_adv and self.discriminator is not None:
+            for param in self.discriminator.parameters():
                 param.requires_grad = True
 
-    def save(self, fname: str, step: int) -> None:
-        print(f"Saving checkpoint into {fname}...")
-        torch.save(self.Swapper.state_dict(), f"{fname}_swapper_{step}.pt")
-        torch.save(self.Swapper.state_dict(), f"{fname}_swapper_last.pt")
-        torch.save(self.Id_encoder.state_dict(), f"{fname}_idc_{step}.pt")
-        torch.save(self.Id_encoder.state_dict(), f"{fname}_idc_last.pt")
-        if self.train_adv and self.dis is not None:
-            torch.save(self.dis.state_dict(), f"{fname}_dis_{step}.pt")
-            torch.save(self.dis.state_dict(), f"{fname}_dis_last.pt")
-
-    def load(self, fname: str, step: int | None = None) -> None:
-        print(f"Loading checkpoint from {fname}...")
-        suffix = f"_{step}" if step is not None else "_last"
-        self.Swapper.load_state_dict(torch.load(f"{fname}_swapper{suffix}.pt"))
-        if self.dis is not None:
-            self.dis.load_state_dict(torch.load(f"{fname}_dis{suffix}.pt"))
-        if not self.fine_tune:
-            self.Id_encoder.load_state_dict(torch.load(f"{fname}_idc{suffix}.pt"))
-
     def get_id_code(self, source: torch.Tensor) -> torch.Tensor:
-        return self.Id_encoder(source).detach()
+        return self.id_encoder(source).detach()
 
     def forward(
         self, target: torch.Tensor, source: torch.Tensor, get_latent: bool = False
     ) -> torch.Tensor | tuple[torch.Tensor, list[torch.Tensor]]:
         if not self.fine_tune:
-            source = self.Id_encoder(source)
-        return self.Swapper(target, source, get_latent=get_latent)
+            source = self.id_encoder(source)
+        return self.swapper(target, source, get_latent=get_latent)
 
-    def add_batch_instant_norm2swapper(self) -> None:
+    def add_batch_instance_norm_to_swapper(self) -> None:
         bn_layer = nn.BatchNorm2d(1024)
         in_layer = nn.InstanceNorm2d(1024, affine=True)
-        self.Swapper.E.Encoder["layer_3"] = nn.Sequential(
-            self.Swapper.E.Encoder["layer_3"],
+        self.swapper.encoder.Encoder["layer_3"] = nn.Sequential(
+            self.swapper.encoder.Encoder["layer_3"],
             bn_layer,
             in_layer,
         )
         for i in range(5):
-            setattr(self.Swapper.E, f"batch_norm_{i}", nn.BatchNorm2d(1024))
-            setattr(self.Swapper.E, f"instance_norm_{i}", nn.InstanceNorm2d(1024, affine=True))
+            setattr(self.swapper.encoder, f"batch_norm_{i}", nn.BatchNorm2d(1024))
+            setattr(self.swapper.encoder, f"instance_norm_{i}", nn.InstanceNorm2d(1024, affine=True))
 
 
-def build_AlphaFace(
+def remap_legacy_swapper_state_dict(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    """Remap old ``Swapper`` checkpoint keys (``E.``/``G.``) to the renamed attributes
+    (``encoder.``/``decoder.``) so pre-refactor swapper weights still load."""
+    remapped: dict[str, torch.Tensor] = {}
+    for key, value in state_dict.items():
+        if key.startswith("E."):
+            key = "encoder." + key[len("E.") :]
+        elif key.startswith("G."):
+            key = "decoder." + key[len("G.") :]
+        remapped[key] = value
+    return remapped
+
+
+def build_alpha_face(
     config: DictConfig | None = None,
     fine_tune: bool = False,
     adv_train: bool = True,
     new_id_model: bool = False,
+    device: str = "cpu",
 ) -> AlphaFace:
-    swapper = Swapper(512)
+    use_checkpoint = getattr(config, "use_checkpoint", False) if config is not None else False
+    swapper = Swapper(512, use_checkpoint=use_checkpoint)
     print("Loading pre-trained model for the ID encoder")
     if not new_id_model:
-        id_encoder: nn.Module = ResNet_ID_encoder(ema_path="./models/emp.npy")
+        id_encoder: nn.Module = ResNetIdEncoder(ema_path="./src/alphaface/models/emp.npy", device=device)
         id_encoder.resnet.load_state_dict(  # type: ignore[attr-defined]
-            torch.load("./models/arcface_w600k_r50_pytorch.pt", map_location=torch.device("cuda"))
+            torch.load("./models/arcface_w600k_r50_pytorch.pt", map_location=torch.device(device))
         )
     else:
         assert config is not None
-        weight = torch.load(config.id_network_path)
-        id_encoder = get_model(config.id_network, dropout=0, fp16=False).cuda()
+        weight = torch.load(config.id_network_path, map_location=torch.device(device))
+        id_encoder = get_model(config.id_network, dropout=0, fp16=False).to(device)
         id_encoder.load_state_dict(weight)
 
-    model = AlphaFace(swapper, id_encoder, fine_tune=fine_tune)
+    model = AlphaFace(swapper, id_encoder, fine_tune=fine_tune, device=device)
     if adv_train:
-        model.Prepareing_adversrial_learning(img_size=256, max_conv_size=512)
-        model.Preparing_VGG_percet_loss()
+        model.prepare_adversarial_learning(img_size=256, max_conv_size=512)
+        model.prepare_vgg_perceptual_loss()
     return model

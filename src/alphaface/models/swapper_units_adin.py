@@ -9,7 +9,7 @@ import torch.nn.functional as F
 import torchvision.models as tvmodels
 
 
-class Adaptive_instance_normalistaion(nn.Module):
+class AdaptiveInstanceNorm(nn.Module):
     def __init__(self) -> None:
         super().__init__()
 
@@ -31,13 +31,13 @@ class Adaptive_instance_normalistaion(nn.Module):
         )
 
 
-class Target_Adaptive_Identify_Feature_Feeding_Block(nn.Module):
+class TargetAdaptiveIdentityFeedingBlock(nn.Module):
     def __init__(self, output_dim: int, z_id_size: int = 512) -> None:
         super().__init__()
         self.output_dim = output_dim
         self.z_id_size = z_id_size
         self.fc = nn.Linear(self.z_id_size, self.output_dim)
-        self.AdaIN = Adaptive_instance_normalistaion()
+        self.AdaIN = AdaptiveInstanceNorm()
 
     def forward(self, z_id: torch.Tensor, z_target: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         out = self.fc(z_id)
@@ -50,7 +50,7 @@ class Target_Adaptive_Identify_Feature_Feeding_Block(nn.Module):
         return first_1028, second_1024
 
 
-class Operation_Unit(nn.Module):
+class OperationUnit(nn.Module):
     def __init__(
         self,
         channel: int,
@@ -65,9 +65,7 @@ class Operation_Unit(nn.Module):
         self.id_feature_in_dim = identity_feature_in_dim
         self.Conv1 = nn.Conv2d(self.channel, self.channel, kernel_size=3, stride=1, padding=0)
         self.activation = nn.ReLU()
-        self.IFF = Target_Adaptive_Identify_Feature_Feeding_Block(
-            self.id_feature_out_dim, z_id_size=self.id_feature_in_dim
-        )
+        self.IFF = TargetAdaptiveIdentityFeedingBlock(self.id_feature_out_dim, z_id_size=self.id_feature_in_dim)
 
     def forward(self, input_feature: torch.Tensor, id_feature: torch.Tensor) -> torch.Tensor:
         idf0_0, idf0_1 = self.IFF(id_feature, input_feature)
@@ -88,19 +86,19 @@ class Operation_Unit(nn.Module):
         return x2
 
 
-class Cross_Adaptive_Identity_Injdection_Block(nn.Module):
+class CrossAdaptiveIdentityInjectionBlock(nn.Module):
     def __init__(self, channel: int, identity_feature_out_dim: int, identity_feature_in_dim: int) -> None:
         super().__init__()
         self.channel = channel
         self.identity_feature_out_dim = identity_feature_out_dim
         self.identity_feature_in_dim = identity_feature_in_dim
 
-        self.OP1 = Operation_Unit(
+        self.OP1 = OperationUnit(
             self.channel,
             self.identity_feature_out_dim,
             identity_feature_in_dim=self.identity_feature_in_dim,
         )
-        self.OP2 = Operation_Unit(
+        self.OP2 = OperationUnit(
             self.channel,
             self.identity_feature_out_dim,
             identity_feature_in_dim=self.identity_feature_in_dim,
@@ -113,10 +111,11 @@ class Cross_Adaptive_Identity_Injdection_Block(nn.Module):
         return input_feature + x
 
 
-class Encoder_noBNIN(nn.Module):
-    def __init__(self, id_feature_dim: int) -> None:
+class EncoderNoBNIN(nn.Module):
+    def __init__(self, id_feature_dim: int, use_checkpoint: bool = False) -> None:
         super().__init__()
         self.id_feature_dim = id_feature_dim
+        self.use_checkpoint = use_checkpoint
         self.Encoder_channel = [3, 128, 256, 512, 1024]
         self.Encoder_kernel_size = [7, 3, 3, 3]
         self.pading_scale = [0, 1, 1, 1]
@@ -137,22 +136,29 @@ class Encoder_noBNIN(nn.Module):
             }
         )
         self.fusion_module = nn.ModuleDict(
-            {f"fusion_layer_{i}": Cross_Adaptive_Identity_Injdection_Block(1024, 2048, 512) for i in range(6)}
+            {f"fusion_layer_{i}": CrossAdaptiveIdentityInjectionBlock(1024, 2048, 512) for i in range(6)}
         )
 
     def forward(self, x: torch.Tensor, id_feature: torch.Tensor) -> torch.Tensor:
+        from torch.utils.checkpoint import checkpoint
+
         x = F.pad(x, (3, 3, 3, 3, 0, 0), mode="reflect")
         for i in range(4):
             x = self.Encoder[f"layer_{i}"](x)
         for i in range(6):
-            x = self.fusion_module[f"fusion_layer_{i}"](x, id_feature)
+            layer = self.fusion_module[f"fusion_layer_{i}"]
+            if self.use_checkpoint and self.training:
+                x = checkpoint(layer, x, id_feature, use_reentrant=False)
+            else:
+                x = layer(x, id_feature)
         return x
 
 
 class Encoder(nn.Module):
-    def __init__(self, id_feature_dim: int) -> None:
+    def __init__(self, id_feature_dim: int, use_checkpoint: bool = False) -> None:
         super().__init__()
         self.id_feature_dim = id_feature_dim
+        self.use_checkpoint = use_checkpoint
         self.Encoder_channel = [3, 128, 256, 512, 1024]
         self.Encoder_kernel_size = [7, 3, 3, 3]
         self.pading_scale = [0, 1, 1, 1]
@@ -173,15 +179,21 @@ class Encoder(nn.Module):
             }
         )
         self.fusion_module = nn.ModuleDict(
-            {f"fusion_layer_{i}": Cross_Adaptive_Identity_Injdection_Block(1024, 2048, 512) for i in range(6)}
+            {f"fusion_layer_{i}": CrossAdaptiveIdentityInjectionBlock(1024, 2048, 512) for i in range(6)}
         )
 
     def forward(self, x: torch.Tensor, id_feature: torch.Tensor) -> torch.Tensor:
+        from torch.utils.checkpoint import checkpoint
+
         x = F.pad(x, (3, 3, 3, 3, 0, 0), mode="reflect")
         for i in range(4):
             x = self.Encoder[f"layer_{i}"](x)
         for i in range(6):
-            x = self.fusion_module[f"fusion_layer_{i}"](x, id_feature)
+            layer = self.fusion_module[f"fusion_layer_{i}"]
+            if self.use_checkpoint and self.training:
+                x = checkpoint(layer, x, id_feature, use_reentrant=False)
+            else:
+                x = layer(x, id_feature)
         return x
 
 

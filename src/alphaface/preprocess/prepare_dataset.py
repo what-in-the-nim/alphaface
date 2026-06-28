@@ -68,14 +68,14 @@ def _output_stem(source_root: Path, image_path: Path, index: int) -> str:
 
 def _load_id_encoder(checkpoint_path: str, device: str):
     """Load a standalone ArcFace ResNet-50 checkpoint for embedding inference."""
-    from ..models.swapper_alphaface import build_AlphaFace  # lazy import
+    from ..models.swapper_alphaface import build_alpha_face  # lazy import
 
-    model = build_AlphaFace(device=device)
+    model = build_alpha_face(device=device)
     ckpt = torch.load(checkpoint_path, map_location=device)
     state = ckpt.get("swapper", ckpt)
-    model.Id_encoder.load_state_dict(state, strict=False)
-    model.Id_encoder.eval().to(device)
-    return model.Id_encoder
+    model.id_encoder.load_state_dict(state, strict=False)
+    model.id_encoder.eval().to(device)
+    return model.id_encoder
 
 
 def _compute_embeddings(
