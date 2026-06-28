@@ -153,10 +153,26 @@ def run_caption(
 
     captions = captioner.caption_many(bgr_images, progress=True)
 
+    written = empty = verify_fail = 0
     for path, cap in tqdm(list(zip(pending, captions)), desc="Writing captions", unit="img"):
-        update_png_chunks(path, force=True, caption=cap.strip())
+        cap = cap.strip()
+        if not cap:
+            log.warning("Empty caption returned for %s — skipping (re-run to retry)", path.name)
+            empty += 1
+            continue
+        update_png_chunks(path, force=True, caption=cap)
+        saved = Image.open(str(path)).text.get("alphaface_caption", "").strip()
+        if saved != cap:
+            log.error("Write verification failed for %s (got %r)", path.name, saved[:40] if saved else "")
+            verify_fail += 1
+        else:
+            written += 1
 
-    log.info("Caption complete — %d captions written", len(pending))
+    log.info("Caption complete — %d written, %d empty, %d verify failures", written, empty, verify_fail)
+    if verify_fail:
+        log.error("%d files failed write verification — check filesystem/permissions", verify_fail)
+    if empty:
+        log.warning("%d images have no caption — re-run 'alphaface caption' to retry them", empty)
 
 
 def run_embed(

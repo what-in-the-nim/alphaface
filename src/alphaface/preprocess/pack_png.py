@@ -148,7 +148,7 @@ def update_png_chunks(
     meta = dict(pil.text)
 
     updates: dict[str, str] = {}
-    if caption is not None:
+    if caption:
         updates["alphaface_caption"] = caption.strip()
     if clip_img_emb is not None:
         updates["alphaface_clip_img"] = _enc(_require_embedding("alphaface_clip_img", clip_img_emb))
