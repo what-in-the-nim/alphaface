@@ -156,52 +156,56 @@ class AlphaFaceLitModule(L.LightningModule):
         img1_s = self._to_source(img1_t)
         img2_s = self._to_source(img2_t)
 
-        swapped_1_2 = model(img1_t, img2_s)
-        swapped_2_1 = model(img2_t, img1_s)
-
-        swapped112_1_2 = self._to_source(swapped_1_2)
-        swapped112_2_1 = self._to_source(swapped_2_1)
-
-        img1_2_features = clip_model.encode_image(self._to_clip(swapped_1_2))
-        img2_1_features = clip_model.encode_image(self._to_clip(swapped_2_1))
-
         with torch.no_grad():
             identity_code_1 = pre_id1.to(dtype=torch.float32)
             identity_code_2 = pre_id2.to(dtype=torch.float32)
-
             img1_features = pre_clip_img1.to(dtype=torch.float32)
             img2_features = pre_clip_img2.to(dtype=torch.float32)
-
             text1_features = pre_clip_txt1.to(dtype=torch.float32)
             text2_features = pre_clip_txt2.to(dtype=torch.float32)
 
-        swapped_code_1_2 = model.id_encoder(swapped112_1_2)
-        swapped_code_2_1 = model.id_encoder(swapped112_2_1)
+        # Cross-swap — retained for cycle, perceptual, clip, and (later) disc.
+        swapped_1_2 = model(img1_t, img2_s)
+        swapped_2_1 = model(img2_t, img1_s)
 
+        # ID loss: encode swapped faces at 112px, free the 112-sized tensors immediately.
+        swapped_code_1_2 = model.id_encoder(self._to_source(swapped_1_2))
+        swapped_code_2_1 = model.id_encoder(self._to_source(swapped_2_1))
         loss_id = identity_loss(swapped_code_2_1, identity_code_1) + identity_loss(swapped_code_1_2, identity_code_2)
+        del swapped_code_1_2, swapped_code_2_1
 
+        # Self-reconstruction: compute and immediately discard outputs.
         swapped_face_1_1 = model(img1_t, img1_s)
         swapped_face_2_2 = model(img2_t, img2_s)
         loss_self_rec = reconstruction_loss(img1_t, swapped_face_1_1) + reconstruction_loss(img2_t, swapped_face_2_2)
+        del swapped_face_1_1, swapped_face_2_2
 
+        # Perceptual loss — uses cross-swap outputs in-place.
         loss_percept = model.perceptual_loss(img1_t, swapped_1_2) + model.perceptual_loss(img2_t, swapped_2_1)
 
+        # Cycle-consistency: feed cross-swap back through model, free cycle outputs.
         swapped_face_1_2_1 = model(swapped_1_2, img1_s)
         swapped_face_2_1_2 = model(swapped_2_1, img2_s)
         loss_2cycle_rec = reconstruction_loss(img1_t, swapped_face_1_2_1) + reconstruction_loss(
             img2_t, swapped_face_2_1_2
         )
+        del swapped_face_1_2_1, swapped_face_2_1_2
 
+        # Masked reconstruction — still uses cross-swap outputs.
         loss_masked_recon = masked_reconstruction_loss(img1_t, swapped_1_2, mask1_t) + masked_reconstruction_loss(
             img2_t, swapped_2_1, mask2_t
         )
 
+        # CLIP losses — encode swapped faces, then free CLIP tensors.
+        img1_2_features = clip_model.encode_image(self._to_clip(swapped_1_2))
+        img2_1_features = clip_model.encode_image(self._to_clip(swapped_2_1))
         clip_t_loss_id = identity_loss(img2_1_features, img1_features) + identity_loss(img1_2_features, img2_features)
         clip_score_1 = identity_score(img1_features, text1_features)
         clip_score_2 = identity_score(img2_features, text2_features)
         clip_text2img_loss = clip_text_loss(img2_1_features, text2_features, clip_score_2) + clip_text_loss(
             img1_2_features, text1_features, clip_score_1
         )
+        del img1_2_features, img2_1_features, clip_score_1, clip_score_2
 
         base_gen_loss = (
             cfg.w_id * loss_id
@@ -221,6 +225,7 @@ class AlphaFaceLitModule(L.LightningModule):
         if not adversarial:
             total_gen_loss = base_gen_loss
             self.manual_backward(total_gen_loss / grad_acc)
+            del swapped_1_2, swapped_2_1
         else:
             # Freeze disc params so the generator backward doesn't pollute disc grads.
             for p in model.discriminator.parameters():
@@ -230,6 +235,7 @@ class AlphaFaceLitModule(L.LightningModule):
             loss_adv_gen = multi_scale_adversarial_loss(
                 disc_gen_output_1_2, is_real=True
             ) + multi_scale_adversarial_loss(disc_gen_output_2_1, is_real=True)
+            del disc_gen_output_1_2, disc_gen_output_2_1
             total_gen_loss = base_gen_loss + cfg.w_gen_adv * loss_adv_gen
             self.manual_backward(total_gen_loss / grad_acc)
             for p in model.discriminator.parameters():
@@ -241,6 +247,7 @@ class AlphaFaceLitModule(L.LightningModule):
             loss_disc_fake = multi_scale_adversarial_loss(
                 model.discriminator(swapped_1_2.detach()), is_real=False
             ) + multi_scale_adversarial_loss(model.discriminator(swapped_2_1.detach()), is_real=False)
+            del swapped_1_2, swapped_2_1
             total_disc_loss = (loss_disc_real + loss_disc_fake) / 2
             self.manual_backward(total_disc_loss / grad_acc)
 

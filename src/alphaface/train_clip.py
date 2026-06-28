@@ -3,10 +3,13 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import torch
 from pytorch_lightning.cli import LightningCLI
 
 from .data_module import AlphaFaceDataModule
 from .lit_module import AlphaFaceLitModule
+
+torch.set_float32_matmul_precision("medium")
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "configs" / "train.yaml"
 SUBCOMMANDS = {"fit", "validate", "test", "predict"}
