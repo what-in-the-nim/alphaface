@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-import argparse
 import os
 from typing import Any
 
 import clip
+import hydra
 import torch
 import torch.nn.functional as F
 import torchvision.transforms as transforms
+from omegaconf import DictConfig
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
@@ -24,7 +25,6 @@ from .objectives.loss import (
     multi_scale_adversarial_loss,
     reconstruction_loss,
 )
-from .utils.utils_config import get_config
 from .utils.utils_distributed_sampler import setup_seed
 
 
@@ -46,7 +46,7 @@ def _get_device() -> str:
 
 
 def train_with_clip(
-    config: Any,
+    config: DictConfig,
     fs_model: AlphaFace,
     clip_model: Any,
     opts: list[Optimizer],
@@ -326,10 +326,10 @@ def train_with_clip(
             global_step += 1
 
 
-def main(args: argparse.Namespace) -> None:
+@hydra.main(config_path="configs", config_name="train", version_base=None)
+def main(cfg: DictConfig) -> None:
     device = _get_device()
     print(f"Using device: {device}")
-    cfg = get_config(args.config)
     setup_seed(seed=cfg.seed, cuda_deterministic=False)
     os.makedirs(cfg.log_dir, exist_ok=True)
 
@@ -396,6 +396,4 @@ def main(args: argparse.Namespace) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="AlphaFace CLIP training")
-    parser.add_argument("config", type=str, default="./configs/test_config", help="py config file")
-    main(parser.parse_args())
+    main()

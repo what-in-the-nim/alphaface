@@ -1,0 +1,4 @@
+defaults:
+  - base
+  - experiment@_global_: alphaface_train_demo
+  - _self_

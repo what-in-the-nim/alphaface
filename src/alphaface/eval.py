@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-import argparse
 import os
 from collections.abc import Iterable
 from pathlib import Path
 
+import hydra
 import torch
 import torchvision.transforms as transforms
+from omegaconf import DictConfig
 from PIL import Image
 from torch import nn
 from torch.utils.tensorboard import SummaryWriter
 
 from .models.swapper_alphaface import AlphaFace, build_AlphaFace
-from .utils.utils_config import get_config
 from .utils.utils_distributed_sampler import setup_seed
 
 
@@ -46,13 +46,13 @@ def tensor2img(tensor: torch.Tensor) -> torch.Tensor:
     return (tensor * 255.0).int()
 
 
-def eval_alphaface(config: object, model: AlphaFace) -> None:
-    SummaryWriter(config.tb_dir)  # type: ignore[attr-defined]
+def eval_alphaface(config: DictConfig, model: AlphaFace) -> None:
+    SummaryWriter(config.tb_dir)
 
-    os.makedirs(config.output, exist_ok=True)  # type: ignore[attr-defined]
+    os.makedirs(config.output, exist_ok=True)
 
-    print(f"Resuming from checkpoint...from {config.model_path}")  # type: ignore[attr-defined]
-    dict_checkpoint = torch.load(config.model_path)  # type: ignore[attr-defined]
+    print(f"Resuming from checkpoint...from {config.model_path}")
+    dict_checkpoint = torch.load(config.model_path)
     model.Swapper.load_state_dict(dict_checkpoint["swapper"])
 
     model = model.cuda()
@@ -74,8 +74,8 @@ def eval_alphaface(config: object, model: AlphaFace) -> None:
         ]
     )
 
-    src_img_list = list_images(config.src_path)  # type: ignore[attr-defined]
-    tar_img_list = list_images(config.tar_path)  # type: ignore[attr-defined]
+    src_img_list = list_images(config.src_path)
+    tar_img_list = list_images(config.tar_path)
 
     for src_img_file in src_img_list:
         img1_s = s_transform(Image.open(src_img_file)).unsqueeze(0).cuda()
@@ -103,22 +103,18 @@ def eval_alphaface(config: object, model: AlphaFace) -> None:
             print(f"Saved image to {save_path}")
 
 
-def main(args: argparse.Namespace) -> None:
-    cfg = get_config(args.config)
+@hydra.main(config_path="configs", config_name="eval", version_base=None)
+def main(cfg: DictConfig) -> None:
     setup_seed(seed=cfg.seed, cuda_deterministic=False)
 
     if cfg.tensorboard:
-        SummaryWriter(cfg.tb_path)
-    else:
-        pass
+        SummaryWriter(cfg.tb_dir)
     os.makedirs(cfg.log_dir, exist_ok=True)
 
-    print("Preparing the student model")
+    print("Preparing the AlphaFace model")
     alphaface = build_AlphaFace(config=cfg).to("cuda")
     eval_alphaface(cfg, alphaface)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="AlphaFace evaluation")
-    parser.add_argument("config", type=str, default="./configs/test_config", help="py config file")
-    main(parser.parse_args())
+    main()

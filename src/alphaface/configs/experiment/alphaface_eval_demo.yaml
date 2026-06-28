@@ -1,0 +1,34 @@
+network: test1
+embedding_size: 512
+momentum: 0.9
+weight_decay: 5e-4
+batch_size: 4
+init_lr_swapper: 1e-4
+init_lr_dis: 1e-4
+verbose: 2000
+num_epoch: 100000
+warmup_epoch: 0
+savedir: Save2
+src_img_size: 112
+tar_img_size: 256
+visualize: true
+from_scretch: false
+
+optimizer: adamw
+db_path: ./dataset/ffhq_lpff/256_small
+tensorboard: false
+tb_dir: ./logs/swap1
+adv_sess: 150000
+lr_schedule_step: 20000
+exp_try_num: 100
+
+# Id encoder
+id_network_path: ./models/vit_b_fr_pgair.pt
+id_network: vit_b
+
+# Checkpoint
+model_path: ./models/alphaface_demo.pt
+output: ./output
+
+src_path: ./dataset/source
+tar_path: ./dataset/target
