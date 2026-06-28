@@ -2,62 +2,64 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
+import onnxruntime as ort
 
 from .align import AlignedFace
 
-# 68-point landmark layout (dlib/ibug convention, as returned by insightface buffalo_l):
-#   0-16  jaw contour (left outer → chin → right outer)
-#   17-21 left eyebrow  (inner → outer)
-#   22-26 right eyebrow (inner → outer)
-#   27-30 nose bridge
-#   31-35 nose base
-#   36-41 left eye
-#   42-47 right eye
-#   48-67 mouth
+# BiSeNet 19-class labels (index = class id):
+#   0: background,  1: skin,    2: l_brow,  3: r_brow,  4: l_eye,
+#   5: r_eye,       6: eye_g,   7: l_ear,   8: r_ear,   9: ear_r,
+#  10: nose,       11: mouth,  12: u_lip,  13: l_lip,  14: neck,
+#  15: neck_l,     16: cloth,  17: hair,   18: hat
+
+# Classes treated as "face" (masked to 0); everything else → 255.
+_FACE_CLASSES = frozenset([1, 2, 3, 4, 5, 10, 11, 12, 13])
+
+_INPUT_SIZE = (512, 512)
+_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
 
-def _face_polygon(lm: np.ndarray, size: int) -> np.ndarray:
-    """Build a face-covering polygon from 68 landmarks.
+def _preprocess(image_bgr: np.ndarray) -> np.ndarray:
+    rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    resized = cv2.resize(rgb, _INPUT_SIZE, interpolation=cv2.INTER_LINEAR)
+    normalized = (resized.astype(np.float32) / 255.0 - _MEAN) / _STD
+    return np.expand_dims(normalized.transpose(2, 0, 1), 0)  # BCHW
 
-    The polygon follows the jaw contour along the bottom and sides, then
-    connects across an estimated forehead boundary above the eyebrows.
-    """
-    jaw = lm[0:17]  # left outer → chin (8) → right outer
 
-    left_brow = lm[17:22]  # inner → outer
-    right_brow = lm[22:27]  # inner → outer
-
-    # Push brows upward to cover forehead.
-    # Use vertical distance from chin to nose-bridge as reference.
-    chin_y = lm[8, 1]
-    bridge_y = lm[27, 1]
-    dy = max((chin_y - bridge_y) * 0.45, 20.0)
-
-    # Forehead arc: right outer → right inner (reversed brow) then
-    # left inner → left outer, all shifted upward.
-    right_top = right_brow[::-1].copy()  # outer(26) → inner(22)
-    right_top[:, 1] -= dy
-
-    left_top = left_brow.copy()  # inner(17) → outer(21)
-    left_top[:, 1] -= dy
-
-    polygon = np.vstack([jaw, right_top, left_top])
-    return np.clip(polygon, 0, size - 1).astype(np.int32)
+def _postprocess(output: np.ndarray, original_size: tuple[int, int]) -> np.ndarray:
+    seg = output.squeeze(0).argmax(0).astype(np.uint8)
+    return cv2.resize(seg, original_size, interpolation=cv2.INTER_NEAREST)
 
 
 class FaceMasker:
-    """Generate a binary face mask from an AlignedFace.
-
-    Uses the 68-point landmarks already computed during alignment —
-    no extra model or library needed beyond insightface.
+    """Generate a binary face mask using BiSeNet semantic segmentation (ONNX).
 
     Output convention: face pixels = 0, background = 255.
     This matches the dataloader which applies ``1 - mask`` before loss.
+
+    Args:
+        model_path: Path to resnet18.onnx or resnet34.onnx from yakhyo/face-parsing.
+        device: ``"cuda"`` to prefer CUDA, ``"cpu"`` for CPU-only.
     """
+
+    def __init__(self, model_path: str, device: str = "cpu") -> None:
+        providers = (
+            ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            if device == "cuda" and ort.get_device() == "GPU"
+            else ["CPUExecutionProvider"]
+        )
+        self._session = ort.InferenceSession(model_path, providers=providers)
+        self._input_name = self._session.get_inputs()[0].name
+        self._output_names = [o.name for o in self._session.get_outputs()]
 
     def __call__(self, face: AlignedFace) -> np.ndarray:
         h, w = face.image.shape[:2]
-        polygon = _face_polygon(face.landmarks_68, min(h, w))
-        mask = np.full((h, w), 255, dtype=np.uint8)
-        cv2.fillPoly(mask, [polygon], 0)
-        return mask
+        tensor = _preprocess(face.image)
+        outputs = self._session.run(self._output_names, {self._input_name: tensor})
+        seg = _postprocess(outputs[0], (w, h))
+
+        face_mask = np.isin(seg, list(_FACE_CLASSES))
+        result = np.full((h, w), 255, dtype=np.uint8)
+        result[face_mask] = 0
+        return result
