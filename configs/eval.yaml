@@ -1,4 +1,53 @@
-defaults:
-  - base
-  - experiment@_global_: alphaface_eval_demo
-  - _self_
+seed_everything: 2048
+
+trainer:
+  accelerator: auto
+  devices: 1
+  logger: false
+
+model:
+  config:
+    network: test1
+    embedding_size: 512
+    momentum: 0.9
+    weight_decay: 5e-4
+    batch_size: 4
+    init_lr_swapper: 1e-4
+    init_lr_dis: 1e-4
+    verbose: 2000
+    num_epoch: 100000
+    warmup_epoch: 0
+    savedir: Save2
+    src_img_size: 112
+    tar_img_size: 256
+    visualize: true
+    from_scretch: false
+    optimizer: adamw
+    db_path: ./dataset/ffhq_lpff/256_small
+    tensorboard: false
+    tb_dir: ./logs/swap1
+    adv_sess: 150000
+    lr_schedule_step: 20000
+    exp_try_num: 100
+    model_path: ./models/alphaface_demo.pt
+    output: ./output
+    src_path: ./dataset/source
+    tar_path: ./dataset/target
+    log_dir: tmp
+    use_checkpoint: false
+    gradient_acc: 1
+    w_id: 10.0
+    w_self_rec: 0.5
+    w_percept: 0.5
+    w_2cycle: 0.5
+    w_mask_rec: 0.5
+    w_clip_id: 1.0
+    w_clip_text: 1.0
+    w_gen_adv: 1.0
+  device: auto
+
+data:
+  src_path: ./dataset/source
+  tar_path: ./dataset/target
+  output: ./output
+  batch_size: 1
