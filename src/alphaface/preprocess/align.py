@@ -70,6 +70,7 @@ class FaceAligner:
         else:
             providers = ["CPUExecutionProvider"]
 
+        print(f"Initializing InsightFace FaceAnalysis with providers: {providers}")
         self.app = FaceAnalysis(providers=providers)
         self.app.prepare(ctx_id=0 if device == "cuda" else -1, det_size=det_size)
 
