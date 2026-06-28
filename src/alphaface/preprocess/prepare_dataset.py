@@ -39,7 +39,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from .align import FaceAligner
+from .align import AlignedFace, FaceAligner
 from .caption import FaceCaptioner
 from .mask import FaceMasker
 from .pack_png import PackedSample, pack_png, unpack_png
@@ -292,11 +292,30 @@ def run(
     skipped = 0
     global_idx = 0
 
+    align_hits = 0
     for image_path in tqdm(images, desc="Aligning", unit="img"):
         bgr = cv2.imread(str(image_path))
         if bgr is None:
             log.warning("Cannot read %s — skipped", image_path)
             skipped += 1
+            continue
+
+        flat = "_".join(image_path.relative_to(input_dir).with_suffix("").parts)
+        cached_stems = sorted(img_dir.glob(f"??????_{flat}.png"))
+        first_cached_idx = int(cached_stems[0].stem[:6]) if cached_stems else -1
+
+        if cached_stems and first_cached_idx == global_idx:
+            for cf in cached_stems:
+                stem = cf.stem
+                cached_bgr = cv2.imread(str(cf))
+                if cached_bgr is None:
+                    continue
+                if masker is not None and not (mask_dir / f"{stem}.png").exists():
+                    af_tmp = AlignedFace(image=cached_bgr, landmarks_68=np.zeros((68, 2), dtype=np.float32))
+                    cv2.imwrite(str(mask_dir / f"{stem}.png"), masker(af_tmp))
+                pending.append((stem, AlignedFace(image=cached_bgr, landmarks_68=np.zeros((68, 2), dtype=np.float32))))
+                global_idx += 1
+                align_hits += 1
             continue
 
         aligned_faces = (
@@ -319,6 +338,8 @@ def run(
                 cv2.imwrite(str(mask_dir / f"{stem}.png"), masker(af))
 
             pending.append((stem, af))
+
+    log.info("Alignment cache hits: %d/%d", align_hits, len(images) - skipped)
 
     packed_dir = output_dir / "packed"
     existing = _load_existing_packed(packed_dir)
