@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import os
-import queue as Queue
 import random
-import threading
 from collections.abc import Callable
-from functools import partial
 from glob import glob
 
 import numpy as np
@@ -14,8 +11,6 @@ import torchvision.transforms.functional as TF
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
-
-from ..utils.utils_distributed_sampler import DistributedSampler, get_dist_info, worker_init_fn
 
 
 def normalize_by_127_5(img: torch.Tensor) -> torch.Tensor:
@@ -51,7 +46,7 @@ def load_text_from_file(txt_path: str) -> str:
     raise ValueError(f"No non-empty line found in {txt_path}")
 
 
-class FaceImageDataset_ImageOnly(Dataset):
+class FaceImageDatasetImageOnly(Dataset):
     def __init__(
         self,
         db_path: str,
@@ -82,7 +77,7 @@ class FaceImageDataset_ImageOnly(Dataset):
         return img1_t, img2_t
 
 
-class FaceImageDataset_CLIP(Dataset):
+class FaceImageDatasetClip(Dataset):
     def __init__(
         self,
         db_path: str,
@@ -271,13 +266,13 @@ def get_dataloader(db_path: str, batch_size: int, num_workers: int = 4) -> DataL
 
 def get_dataloader_img_only(db_path: str, batch_size: int, num_workers: int = 4) -> DataLoader:
     t_transform, s_transform = _make_transforms()
-    train_set = FaceImageDataset_ImageOnly(db_path, t_transform=t_transform, s_transform=s_transform)
+    train_set = FaceImageDatasetImageOnly(db_path, t_transform=t_transform, s_transform=s_transform)
     return DataLoader(dataset=train_set, batch_size=batch_size, num_workers=num_workers, shuffle=True)
 
 
 def get_dataloader_clip(db_path: str, batch_size: int, num_workers: int = 4) -> DataLoader:
     t_transform, s_transform = _make_transforms()
-    train_set = FaceImageDataset_CLIP(db_path, t_transform=t_transform, s_transform=s_transform)
+    train_set = FaceImageDatasetClip(db_path, t_transform=t_transform, s_transform=s_transform)
     return DataLoader(dataset=train_set, batch_size=batch_size, num_workers=num_workers, shuffle=True)
 
 
@@ -285,90 +280,3 @@ def get_dataloader_fixed_src_tar(db_path: str, batch_size: int, num_workers: int
     t_transform, s_transform = _make_transforms()
     train_set = FaceImageDataset(db_path, t_transform=t_transform, s_transform=s_transform)
     return DataLoader(dataset=train_set, batch_size=batch_size, num_workers=num_workers, shuffle=True)
-
-
-def get_dataloader_tmp(
-    db_path: str,
-    local_rank: int,
-    batch_size: int,
-    seed: int = 2048,
-    num_workers: int = 2,
-) -> DataLoaderX:
-    transform = transforms.Compose(
-        [
-            transforms.RandomHorizontalFlip(),
-            transforms.Resize((128, 128)),
-            transforms.ToTensor(),
-        ]
-    )
-    train_set = FaceImageDataset(db_path, transform)
-    rank, world_size = get_dist_info()
-    train_sampler = DistributedSampler(train_set, num_replicas=world_size, rank=rank, shuffle=True, seed=seed)
-    init_fn = partial(worker_init_fn, num_workers=num_workers, rank=rank, seed=seed)
-    return DataLoaderX(
-        local_rank=local_rank,
-        dataset=train_set,
-        batch_size=batch_size,
-        sampler=train_sampler,
-        num_workers=num_workers,
-        pin_memory=True,
-        drop_last=True,
-        worker_init_fn=init_fn,
-    )
-
-
-class BackgroundGenerator(threading.Thread):
-    def __init__(self, generator: DataLoader, local_rank: int, max_prefetch: int = 6) -> None:
-        super().__init__()
-        self.queue: Queue.Queue = Queue.Queue(max_prefetch)
-        self.generator = generator
-        self.local_rank = local_rank
-        self.daemon = True
-        self.start()
-
-    def run(self) -> None:
-        torch.cuda.set_device(self.local_rank)
-        for item in self.generator:
-            self.queue.put(item)
-        self.queue.put(None)
-
-    def next(self) -> object:
-        next_item = self.queue.get()
-        if next_item is None:
-            raise StopIteration
-        return next_item
-
-    def __next__(self) -> object:
-        return self.next()
-
-    def __iter__(self) -> BackgroundGenerator:
-        return self
-
-
-class DataLoaderX(DataLoader):
-    def __init__(self, local_rank: int, **kwargs: object) -> None:
-        super().__init__(**kwargs)
-        self.stream = torch.cuda.Stream(local_rank)
-        self.local_rank = local_rank
-
-    def __iter__(self) -> DataLoaderX:
-        self.iter = super().__iter__()
-        self.iter = BackgroundGenerator(self.iter, self.local_rank)
-        self.preload()
-        return self
-
-    def preload(self) -> None:
-        self.batch, _ = next(self.iter, None)
-        if self.batch is None:
-            return
-        with torch.cuda.stream(self.stream):
-            for k in range(len(self.batch)):
-                self.batch[k] = self.batch[k].to(device=self.local_rank, non_blocking=True)
-
-    def __next__(self) -> list[torch.Tensor]:
-        torch.cuda.current_stream().wait_stream(self.stream)
-        batch = self.batch
-        if batch is None:
-            raise StopIteration
-        self.preload()
-        return batch
