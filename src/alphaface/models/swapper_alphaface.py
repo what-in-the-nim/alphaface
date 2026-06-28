@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import torch
 from omegaconf import DictConfig
 from torch import nn
 
-from ..backbones import get_model
 from .arcface_resnet import resnet50
 from .swapper_units_adin import Decoder, Discriminator, Encoder, EncoderNoBNIN, VGGPerceptualLoss
+
+# Repo-root models/ dir, resolved from this file so loading works from any cwd.
+MODELS_DIR = Path(__file__).resolve().parents[3] / "models"
 
 
 class Normalize(nn.Module):
@@ -131,22 +135,15 @@ def build_alpha_face(
     config: DictConfig | None = None,
     fine_tune: bool = False,
     adv_train: bool = True,
-    new_id_model: bool = False,
     device: str = "cpu",
 ) -> AlphaFace:
     use_checkpoint = getattr(config, "use_checkpoint", False) if config is not None else False
     swapper = Swapper(512, use_checkpoint=use_checkpoint)
     print("Loading pre-trained model for the ID encoder")
-    if not new_id_model:
-        id_encoder: nn.Module = ResNetIdEncoder(ema_path="./src/alphaface/models/emp.npy", device=device)
-        id_encoder.resnet.load_state_dict(  # type: ignore[attr-defined]
-            torch.load("./models/arcface_w600k_r50_pytorch.pt", map_location=torch.device(device))
-        )
-    else:
-        assert config is not None
-        weight = torch.load(config.id_network_path, map_location=torch.device(device))
-        id_encoder = get_model(config.id_network, dropout=0, fp16=False).to(device)
-        id_encoder.load_state_dict(weight)
+    id_encoder: nn.Module = ResNetIdEncoder(ema_path=str(MODELS_DIR / "emp.npy"), device=device)
+    id_encoder.resnet.load_state_dict(  # type: ignore[attr-defined]
+        torch.load(str(MODELS_DIR / "arcface_w600k_r50_pytorch.pt"), map_location=torch.device(device))
+    )
 
     model = AlphaFace(swapper, id_encoder, fine_tune=fine_tune, device=device)
     if adv_train:
