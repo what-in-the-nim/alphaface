@@ -241,6 +241,35 @@ def _compute_embeddings(
 # ---------------------------------------------------------------------------
 
 
+def _write_packed_stub(
+    stem: str,
+    bgr: np.ndarray,
+    mask_dir: Path,
+    packed_dir: Path,
+    skip_mask: bool,
+) -> None:
+    """Write image+mask to packed/{stem}.png if no packed file exists yet.
+
+    Skipped when a packed PNG is already present so we never downgrade a
+    complete packed sample back to a stub.
+    """
+    packed_path = packed_dir / f"{stem}.png"
+    if packed_path.exists():
+        return
+    img_rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    mask_path = mask_dir / f"{stem}.png"
+    mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE) if not skip_mask and mask_path.exists() else None
+    pack_png(
+        img_rgb=img_rgb,
+        mask=mask,
+        caption=None,
+        clip_img_emb=None,
+        clip_txt_emb=None,
+        id_emb=None,
+        out_path=packed_path,
+    )
+
+
 def run(
     input_dir: Path,
     output_dir: Path,
@@ -271,10 +300,12 @@ def run(
     img_dir = output_dir / "img"
     mask_dir = output_dir / "mask"
     txt_dir = output_dir / "txt"
+    packed_dir = output_dir / "packed"
     img_dir.mkdir(parents=True, exist_ok=True)
     if not skip_mask:
         mask_dir.mkdir(parents=True, exist_ok=True)
     txt_dir.mkdir(parents=True, exist_ok=True)
+    packed_dir.mkdir(parents=True, exist_ok=True)
 
     log.info("Loading models on %s …", device)
     aligner: FaceAligner | None = None
@@ -313,6 +344,7 @@ def run(
                 if masker is not None and not (mask_dir / f"{stem}.png").exists():
                     af_tmp = AlignedFace(image=cached_bgr, landmarks_68=np.zeros((68, 2), dtype=np.float32))
                     cv2.imwrite(str(mask_dir / f"{stem}.png"), masker(af_tmp))
+                _write_packed_stub(stem, cached_bgr, mask_dir, packed_dir, skip_mask)
                 pending.append((stem, AlignedFace(image=cached_bgr, landmarks_68=np.zeros((68, 2), dtype=np.float32))))
                 global_idx += 1
                 align_hits += 1
@@ -341,11 +373,11 @@ def run(
             if masker is not None:
                 cv2.imwrite(str(mask_dir / f"{stem}.png"), masker(af))
 
+            _write_packed_stub(stem, af.image, mask_dir, packed_dir, skip_mask)
             pending.append((stem, af))
 
     log.info("Alignment cache hits: %d/%d", align_hits, len(images) - skipped)
 
-    packed_dir = output_dir / "packed"
     existing = _load_existing_packed(packed_dir)
 
     # Phase 2: concurrent captioning over faces without a cached/file caption.

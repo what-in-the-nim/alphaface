@@ -65,30 +65,34 @@ def _optional_embedding(meta: dict[str, str], key: str) -> np.ndarray | None:
 def pack_png(
     img_rgb: np.ndarray,
     mask: np.ndarray | None,
-    caption: str,
-    clip_img_emb: np.ndarray,
-    clip_txt_emb: np.ndarray,
-    id_emb: np.ndarray,
+    caption: str | None,
+    clip_img_emb: np.ndarray | None,
+    clip_txt_emb: np.ndarray | None,
+    id_emb: np.ndarray | None,
     out_path: str | Path,
 ) -> None:
     """Write a packed RGBA PNG to *out_path*.
+
+    All metadata fields are optional; omitted fields are simply absent from the
+    iTXt chunks so the file can be enriched incrementally by later pipeline
+    stages.  Pass all fields to produce a complete packed sample.
 
     Args:
         img_rgb:      uint8 (H, W, 3) RGB image.
         mask:         uint8 (H, W) mask (0=face, 255=bg). Stored as alpha channel.
                       When None a fully-opaque alpha (255) is written.
-        caption:      Free-text caption string from the captioner.
-        clip_img_emb: float32/16 (512,) CLIP image embedding.
-        clip_txt_emb: float32/16 (512,) CLIP text embedding.
-        id_emb:       float32/16 (512,) ArcFace embedding.
+        caption:      Free-text caption string, or None to omit.
+        clip_img_emb: float32/16 (512,) CLIP image embedding, or None to omit.
+        clip_txt_emb: float32/16 (512,) CLIP text embedding, or None to omit.
+        id_emb:       float32/16 (512,) ArcFace embedding, or None to omit.
         out_path:     Destination path (created / overwritten).
     """
-    caption = caption.strip()
-    if not caption:
-        raise ValueError("Packed PNG requires a non-empty caption")
-    clip_img_emb = _require_embedding("alphaface_clip_img", clip_img_emb)
-    clip_txt_emb = _require_embedding("alphaface_clip_txt", clip_txt_emb)
-    id_emb = _require_embedding("alphaface_id_emb", id_emb)
+    if clip_img_emb is not None:
+        clip_img_emb = _require_embedding("alphaface_clip_img", clip_img_emb)
+    if clip_txt_emb is not None:
+        clip_txt_emb = _require_embedding("alphaface_clip_txt", clip_txt_emb)
+    if id_emb is not None:
+        id_emb = _require_embedding("alphaface_id_emb", id_emb)
 
     if mask is None:
         alpha = np.full(img_rgb.shape[:2], 255, dtype=np.uint8)
@@ -99,10 +103,14 @@ def pack_png(
     pil = Image.fromarray(rgba, "RGBA")
 
     info = PngImagePlugin.PngInfo()
-    info.add_itxt("alphaface_caption", caption)
-    info.add_itxt("alphaface_clip_img", _enc(clip_img_emb))
-    info.add_itxt("alphaface_clip_txt", _enc(clip_txt_emb))
-    info.add_itxt("alphaface_id_emb", _enc(id_emb))
+    if caption:
+        info.add_itxt("alphaface_caption", caption.strip())
+    if clip_img_emb is not None:
+        info.add_itxt("alphaface_clip_img", _enc(clip_img_emb))
+    if clip_txt_emb is not None:
+        info.add_itxt("alphaface_clip_txt", _enc(clip_txt_emb))
+    if id_emb is not None:
+        info.add_itxt("alphaface_id_emb", _enc(id_emb))
 
     pil.save(str(out_path), pnginfo=info, optimize=False)
 
