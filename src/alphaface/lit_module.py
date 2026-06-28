@@ -108,27 +108,23 @@ class AlphaFaceLitModule(L.LightningModule):
         clip_model = self.clip_model
         grad_acc = max(1, getattr(cfg, "gradient_acc", 1))
 
-        # Packed datasets return a 12-tuple with pre-computed embeddings;
-        # legacy datasets return a 6-tuple (embeddings are None).
-        if len(batch) == 12:
-            (
-                img1_t,
-                img2_t,
-                mask1_t,
-                mask2_t,
-                txt1_t,
-                txt2_t,
-                pre_clip_img1,
-                pre_clip_img2,
-                pre_clip_txt1,
-                pre_clip_txt2,
-                pre_id1,
-                pre_id2,
-            ) = batch
-        else:
-            img1_t, img2_t, mask1_t, mask2_t, txt1_t, txt2_t = batch
-            pre_clip_img1 = pre_clip_img2 = pre_clip_txt1 = pre_clip_txt2 = None
-            pre_id1 = pre_id2 = None
+        if len(batch) != 12:
+            raise ValueError(f"AlphaFace training requires packed PNG samples; expected 12 fields, got {len(batch)}")
+
+        (
+            img1_t,
+            img2_t,
+            mask1_t,
+            mask2_t,
+            _txt1_t,
+            _txt2_t,
+            pre_clip_img1,
+            pre_clip_img2,
+            pre_clip_txt1,
+            pre_clip_txt2,
+            pre_id1,
+            pre_id2,
+        ) = batch
 
         img1_s = self._to_source(img1_t)
         img2_s = self._to_source(img2_t)
@@ -143,32 +139,14 @@ class AlphaFaceLitModule(L.LightningModule):
         img2_1_features = clip_model.encode_image(self._to_clip(swapped_2_1))
 
         with torch.no_grad():
+            identity_code_1 = pre_id1.to(dtype=torch.float32)
+            identity_code_2 = pre_id2.to(dtype=torch.float32)
 
-            def _has(t: Any) -> bool:
-                return t is not None and t[0] is not None
+            img1_features = pre_clip_img1.to(dtype=torch.float32)
+            img2_features = pre_clip_img2.to(dtype=torch.float32)
 
-            if _has(pre_id1):
-                identity_code_1 = pre_id1.to(dtype=torch.float32)
-                identity_code_2 = pre_id2.to(dtype=torch.float32)
-            else:
-                identity_code_1 = model.id_encoder(img1_s)
-                identity_code_2 = model.id_encoder(img2_s)
-
-            if _has(pre_clip_img1):
-                img1_features = pre_clip_img1.to(dtype=torch.float32)
-                img2_features = pre_clip_img2.to(dtype=torch.float32)
-            else:
-                img1_features = clip_model.encode_image(self._to_clip(img1_t))
-                img2_features = clip_model.encode_image(self._to_clip(img2_t))
-
-            if _has(pre_clip_txt1):
-                text1_features = pre_clip_txt1.to(dtype=torch.float32)
-                text2_features = pre_clip_txt2.to(dtype=torch.float32)
-            else:
-                tokenized1 = clip.tokenize(txt1_t, context_length=77, truncate=True).to(self.device)
-                tokenized2 = clip.tokenize(txt2_t, context_length=77, truncate=True).to(self.device)
-                text1_features = clip_model.encode_text(tokenized1)
-                text2_features = clip_model.encode_text(tokenized2)
+            text1_features = pre_clip_txt1.to(dtype=torch.float32)
+            text2_features = pre_clip_txt2.to(dtype=torch.float32)
 
         swapped_code_1_2 = model.id_encoder(swapped112_1_2)
         swapped_code_2_1 = model.id_encoder(swapped112_2_1)

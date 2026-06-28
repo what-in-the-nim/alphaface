@@ -64,7 +64,7 @@ class FaceCaptioner:
                     ],
                 }
             ],
-            "max_tokens": 120,
+            "max_tokens": 3000,
         }
         headers = {"Authorization": f"Bearer {self.api_key}"}
         async with sem:
@@ -78,18 +78,33 @@ class FaceCaptioner:
                 data = await resp.json()
         return data["choices"][0]["message"]["content"].strip()
 
-    async def _run(self, images: list[np.ndarray]) -> list[str]:
+    async def _run(self, images: list[np.ndarray], *, progress: bool = False) -> list[str]:
         import aiohttp
+        from tqdm import tqdm
 
         sem = asyncio.Semaphore(self.concurrency)
-        async with aiohttp.ClientSession() as session:
-            return list(await asyncio.gather(*[self._request(session, sem, img) for img in images]))
 
-    def caption_many(self, images: list[np.ndarray]) -> list[str]:
+        async def _indexed_request(session, idx: int, image: np.ndarray) -> tuple[int, str]:
+            return idx, await self._request(session, sem, image)
+
+        async with aiohttp.ClientSession() as session:
+            tasks = [asyncio.create_task(_indexed_request(session, idx, img)) for idx, img in enumerate(images)]
+            if not progress:
+                return [caption for _, caption in sorted(await asyncio.gather(*tasks))]
+
+            results: list[str | None] = [None] * len(tasks)
+            with tqdm(total=len(tasks), desc="Captioning", unit="img") as pbar:
+                for task in asyncio.as_completed(tasks):
+                    idx, caption = await task
+                    results[idx] = caption
+                    pbar.update(1)
+            return [r or "" for r in results]
+
+    def caption_many(self, images: list[np.ndarray], *, progress: bool = False) -> list[str]:
         """Caption a batch of images with concurrent requests."""
         if not images:
             return []
-        return asyncio.run(self._run(images))
+        return asyncio.run(self._run(images, progress=progress))
 
     def __call__(self, image_bgr: np.ndarray) -> str:
         return self.caption_many([image_bgr])[0]

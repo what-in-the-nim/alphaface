@@ -5,7 +5,7 @@ Pipeline per image
 1. Detect + align face(s) to 256×256  →  <output>/img/<stem>.png
 2. Generate binary face mask           →  <output>/mask/<stem>.png
 3. Generate VLM face caption           →  <output>/txt/<stem>.txt
-4. Compute CLIP + ID embeddings and
+4. Compute CLIP + ArcFace embeddings and
    pack everything into a single RGBA  →  <output>/packed/<stem>.png
 
 Entry point
@@ -17,13 +17,12 @@ Or directly:
 
 Flags
 -----
-    --skip-pack               Skip Phase 4 (keep 3-file layout only)
     --delete-originals        Remove img/ mask/ txt/ after packing
-    --id-encoder-checkpoint   Path to ArcFace .pt checkpoint for ID embeddings
+    --id-encoder-checkpoint   Path to ArcFace .pt checkpoint for ID embeddings (required)
     --embed-batch-size N      Mini-batch size for embedding inference (default 64)
 
-Standalone packer (for existing 3-file datasets)
--------------------------------------------------
+Standalone converter (for existing img/mask/txt datasets)
+---------------------------------------------------------
     alphaface-pack-dataset --dataset /path/to/dataset
 """
 
@@ -43,11 +42,44 @@ from tqdm import tqdm
 from .align import FaceAligner
 from .caption import FaceCaptioner
 from .mask import FaceMasker
-from .pack_png import pack_png
+from .pack_png import PackedSample, pack_png, unpack_png
 
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tiff", ".tif"}
+_REBUILD_FIELDS = frozenset({"caption", "clip_image", "clip_text", "arcface"})
+_REBUILD_ALIASES = {
+    "clip_img": "clip_image",
+    "clip-image": "clip_image",
+    "clip_image": "clip_image",
+    "image": "clip_image",
+    "clip_txt": "clip_text",
+    "clip-text": "clip_text",
+    "clip_text": "clip_text",
+    "text": "clip_text",
+    "id": "arcface",
+    "id_emb": "arcface",
+    "arcface": "arcface",
+}
 
 log = logging.getLogger(__name__)
+
+
+def _normalize_rebuild_fields(rebuild: list[str] | tuple[str, ...] | None, rebuild_all: bool = False) -> set[str]:
+    if rebuild_all:
+        return set(_REBUILD_FIELDS)
+
+    fields: set[str] = set()
+    for raw in rebuild or []:
+        key = raw.strip().lower()
+        if not key:
+            continue
+        canonical = _REBUILD_ALIASES.get(key, key)
+        if canonical not in _REBUILD_FIELDS:
+            valid = ", ".join(sorted(_REBUILD_FIELDS))
+            raise ValueError(f"Unknown rebuild field {raw!r}; expected one of: {valid}")
+        fields.add(canonical)
+    if "caption" in fields:
+        fields.add("clip_text")
+    return fields
 
 
 def _find_images(root: Path) -> list[Path]:
@@ -78,63 +110,130 @@ def _load_id_encoder(checkpoint_path: str, device: str):
     return model.id_encoder
 
 
+def _load_existing_packed(packed_dir: Path) -> dict[str, PackedSample]:
+    if not packed_dir.is_dir():
+        return {}
+
+    existing: dict[str, PackedSample] = {}
+    packed_paths = sorted(packed_dir.glob("*.png"))
+    for path in tqdm(packed_paths, desc="Reading packed cache", unit="png"):
+        try:
+            existing[path.stem] = unpack_png(path, require_complete=False)
+        except Exception as exc:
+            log.warning("Ignoring unreadable packed cache %s: %s", path, exc)
+    return existing
+
+
+def _existing_caption(
+    stem: str,
+    txt_dir: Path,
+    existing: dict[str, PackedSample],
+    rebuild_fields: set[str],
+    *,
+    allow_txt: bool = True,
+) -> str:
+    txt_file = txt_dir / f"{stem}.txt"
+    if allow_txt and txt_file.exists():
+        return txt_file.read_text(encoding="utf-8").strip()
+    if "caption" in rebuild_fields:
+        return ""
+    cached = existing.get(stem)
+    return (cached.caption or "").strip() if cached is not None else ""
+
+
 def _compute_embeddings(
     pending: list[tuple[str, object]],
     captions: dict[str, str],
+    existing: dict[str, PackedSample],
+    rebuild_fields: set[str],
     clip_model,
     clip_preprocess,
     id_model,
     device: str,
     batch_size: int,
 ) -> dict[str, dict[str, np.ndarray]]:
-    """Return {stem: {clip_img, clip_txt, id_emb?}} with CPU float32 arrays."""
-    import clip as _clip
+    """Return {stem: {clip_img, clip_txt, id_emb}} with CPU float32 arrays."""
     from PIL import Image as _Image
 
-    stems = [s for s, _ in pending]
-    faces = [af for _, af in pending]
-    caps = [captions.get(s, "") for s in stems]
+    result: dict[str, dict[str, np.ndarray | None]] = {}
+    missing_clip_img: list[tuple[str, object]] = []
+    missing_clip_txt: list[tuple[str, object]] = []
+    missing_id: list[tuple[str, object]] = []
 
-    result: dict[str, dict] = {}
+    for stem, af in tqdm(pending, desc="Planning embeddings", unit="sample"):
+        cached = existing.get(stem)
+        clip_img_emb = cached.clip_img_emb if cached is not None else None
+        clip_txt_emb = cached.clip_txt_emb if cached is not None else None
+        id_emb = cached.id_emb if cached is not None else None
+        if "clip_image" in rebuild_fields:
+            clip_img_emb = None
+        if "clip_text" in rebuild_fields:
+            clip_txt_emb = None
+        if "arcface" in rebuild_fields:
+            id_emb = None
 
-    for i in range(0, len(stems), batch_size):
-        batch_stems = stems[i : i + batch_size]
-        batch_faces = faces[i : i + batch_size]
-        batch_caps = caps[i : i + batch_size]
+        result[stem] = {
+            "clip_img_emb": clip_img_emb,
+            "clip_txt_emb": clip_txt_emb,
+            "id_emb": id_emb,
+        }
+        if clip_img_emb is None:
+            missing_clip_img.append((stem, af))
+        if clip_txt_emb is None:
+            missing_clip_txt.append((stem, af))
+        if id_emb is None:
+            missing_id.append((stem, af))
 
-        # --- CLIP image ---
+    log.info(
+        "Embedding cache hits: clip_img=%d/%d clip_txt=%d/%d id=%d/%d",
+        len(pending) - len(missing_clip_img),
+        len(pending),
+        len(pending) - len(missing_clip_txt),
+        len(pending),
+        len(pending) - len(missing_id),
+        len(pending),
+    )
+
+    for i in tqdm(range(0, len(missing_clip_img), batch_size), desc="CLIP image embeddings", unit="batch"):
+        batch = missing_clip_img[i : i + batch_size]
+        batch_stems = [s for s, _ in batch]
+        batch_faces = [af for _, af in batch]
         pil_imgs = [_Image.fromarray(cv2.cvtColor(af.image, cv2.COLOR_BGR2RGB)) for af in batch_faces]
         clip_img_batch = torch.stack([clip_preprocess(p) for p in pil_imgs]).to(device)
         with torch.no_grad():
             clip_img_embs = clip_model.encode_image(clip_img_batch).cpu().float().numpy()
+        for j, stem in enumerate(batch_stems):
+            result[stem]["clip_img_emb"] = clip_img_embs[j]
 
-        # --- CLIP text ---
+    for i in tqdm(range(0, len(missing_clip_txt), batch_size), desc="CLIP text embeddings", unit="batch"):
+        import clip as _clip
+
+        batch = missing_clip_txt[i : i + batch_size]
+        batch_stems = [s for s, _ in batch]
+        batch_caps = [captions.get(s, "") for s in batch_stems]
         tokens = _clip.tokenize(batch_caps, context_length=77, truncate=True).to(device)
         with torch.no_grad():
             clip_txt_embs = clip_model.encode_text(tokens).cpu().float().numpy()
-
-        # --- ArcFace ID (optional) ---
-        id_embs = [None] * len(batch_stems)
-        if id_model is not None:
-            id_imgs = []
-            for af in batch_faces:
-                face_112 = cv2.resize(af.image, (112, 112))  # BGR uint8
-                face_t = torch.from_numpy(face_112).permute(2, 0, 1).float()
-                face_t = (face_t / 127.5) - 1.0  # [-1, 1]
-                id_imgs.append(face_t)
-            id_batch = torch.stack(id_imgs).to(device)
-            with torch.no_grad():
-                id_embs_t = id_model(id_batch).cpu().float().numpy()
-            id_embs = list(id_embs_t)
-
         for j, stem in enumerate(batch_stems):
-            result[stem] = {
-                "clip_img_emb": clip_img_embs[j],
-                "clip_txt_emb": clip_txt_embs[j],
-                "id_emb": id_embs[j],
-            }
+            result[stem]["clip_txt_emb"] = clip_txt_embs[j]
 
-    return result
+    for i in tqdm(range(0, len(missing_id), batch_size), desc="ArcFace embeddings", unit="batch"):
+        batch = missing_id[i : i + batch_size]
+        batch_stems = [s for s, _ in batch]
+        batch_faces = [af for _, af in batch]
+        id_imgs = []
+        for af in batch_faces:
+            face_112 = cv2.resize(af.image, (112, 112))  # BGR uint8
+            face_t = torch.from_numpy(face_112).permute(2, 0, 1).float()
+            face_t = (face_t / 127.5) - 1.0  # [-1, 1]
+            id_imgs.append(face_t)
+        id_batch = torch.stack(id_imgs).to(device)
+        with torch.no_grad():
+            id_embs_t = id_model(id_batch).cpu().float().numpy()
+        for j, stem in enumerate(batch_stems):
+            result[stem]["id_emb"] = id_embs_t[j]
+
+    return result  # type: ignore[return-value]
 
 
 # ---------------------------------------------------------------------------
@@ -149,21 +248,24 @@ def run(
     output_size: int = 256,
     largest_only: bool = True,
     skip_mask: bool = False,
-    skip_caption: bool = False,
     mask_model: str = "weights/resnet34.onnx",
     caption_url: str = "http://localhost:11434/v1",
     caption_model: str = "llava:7b",
     caption_api_key: str = "none",
     caption_concurrency: int = 4,
     caption_timeout: float = 60.0,
-    skip_pack: bool = False,
     id_encoder_checkpoint: str | None = None,
     embed_batch_size: int = 64,
     delete_originals: bool = False,
+    rebuild: list[str] | tuple[str, ...] | None = None,
+    rebuild_all: bool = False,
 ) -> None:
+    rebuild_fields = _normalize_rebuild_fields(rebuild, rebuild_all)
     images = _find_images(input_dir)
     if not images:
         sys.exit(f"No images found under {input_dir}")
+    if not id_encoder_checkpoint:
+        sys.exit("--id-encoder-checkpoint is required so packed PNGs contain ArcFace embeddings")
     log.info("Found %d source images", len(images))
 
     img_dir = output_dir / "img"
@@ -172,22 +274,17 @@ def run(
     img_dir.mkdir(parents=True, exist_ok=True)
     if not skip_mask:
         mask_dir.mkdir(parents=True, exist_ok=True)
-    if not skip_caption:
-        txt_dir.mkdir(parents=True, exist_ok=True)
+    txt_dir.mkdir(parents=True, exist_ok=True)
 
     log.info("Loading models on %s …", device)
     aligner = FaceAligner(device=device)
     masker = FaceMasker(model_path=mask_model, device=device) if not skip_mask else None
-    captioner = (
-        FaceCaptioner(
-            base_url=caption_url,
-            model=caption_model,
-            api_key=caption_api_key,
-            concurrency=caption_concurrency,
-            timeout=caption_timeout,
-        )
-        if not skip_caption
-        else None
+    captioner = FaceCaptioner(
+        base_url=caption_url,
+        model=caption_model,
+        api_key=caption_api_key,
+        concurrency=caption_concurrency,
+        timeout=caption_timeout,
     )
 
     # Phase 1: align + mask, collecting faces for batch captioning.
@@ -223,24 +320,36 @@ def run(
 
             pending.append((stem, af))
 
-    # Phase 2: concurrent captioning over all collected faces.
-    if captioner is not None and pending:
-        log.info("Captioning %d faces concurrently (concurrency=%d) …", len(pending), caption_concurrency)
-        stems, faces = zip(*pending)
-        captions_list = captioner.caption_many([f.image for f in faces])
-        for stem, caption in zip(stems, captions_list):
+    packed_dir = output_dir / "packed"
+    existing = _load_existing_packed(packed_dir)
+
+    # Phase 2: concurrent captioning over faces without a cached/file caption.
+    caption_pending = [
+        (stem, af)
+        for stem, af in tqdm(pending, desc="Checking captions", unit="sample")
+        if not _existing_caption(stem, txt_dir, existing, rebuild_fields, allow_txt="caption" not in rebuild_fields)
+    ]
+    if caption_pending:
+        log.info("Captioning %d faces concurrently (concurrency=%d) …", len(caption_pending), caption_concurrency)
+        stems, faces = zip(*caption_pending)
+        captions_list = captioner.caption_many([f.image for f in faces], progress=True)
+        for stem, caption in tqdm(list(zip(stems, captions_list)), desc="Writing captions", unit="txt"):
             (txt_dir / f"{stem}.txt").write_text(caption + "\n", encoding="utf-8")
+    else:
+        log.info("Caption cache hits: %d/%d", len(pending), len(pending))
 
     written = len(pending)
     log.info("Finished phases 1-2 — written: %d  skipped: %d", written, skipped)
 
     # Phase 3: compute embeddings and pack into single RGBA PNG files.
-    if not skip_pack and pending:
+    if pending:
         _run_pack(
             pending=pending,
             txt_dir=txt_dir,
             mask_dir=mask_dir,
             output_dir=output_dir,
+            existing=existing,
+            rebuild_fields=rebuild_fields,
             device=device,
             id_encoder_checkpoint=id_encoder_checkpoint,
             embed_batch_size=embed_batch_size,
@@ -256,30 +365,67 @@ def _run_pack(
     txt_dir: Path,
     mask_dir: Path,
     output_dir: Path,
+    existing: dict[str, PackedSample] | None,
+    rebuild_fields: set[str],
     device: str,
     id_encoder_checkpoint: str | None,
     embed_batch_size: int,
     skip_mask: bool,
     delete_originals: bool,
 ) -> None:
-    import clip as _clip
-
-    log.info("Phase 3: loading CLIP for embedding computation …")
-    clip_model, clip_preprocess = _clip.load("ViT-B/32", device=device, jit=False)
-    clip_model.eval()
-
-    id_model = None
-    if id_encoder_checkpoint:
-        log.info("Loading ID encoder from %s …", id_encoder_checkpoint)
-        id_model = _load_id_encoder(id_encoder_checkpoint, device)
+    existing = existing or _load_existing_packed(output_dir / "packed")
 
     captions: dict[str, str] = {}
-    for stem, _ in pending:
-        txt_file = txt_dir / f"{stem}.txt"
-        captions[stem] = txt_file.read_text(encoding="utf-8").strip() if txt_file.exists() else ""
+    for stem, _ in tqdm(pending, desc="Loading captions", unit="sample"):
+        captions[stem] = _existing_caption(stem, txt_dir, existing, rebuild_fields)
+
+    missing_clip = []
+    missing_id = []
+    for stem, _ in tqdm(pending, desc="Checking embedding cache", unit="sample"):
+        cached = existing.get(stem)
+        if (
+            "clip_image" in rebuild_fields
+            or "clip_text" in rebuild_fields
+            or cached is None
+            or cached.clip_img_emb is None
+            or cached.clip_txt_emb is None
+        ):
+            missing_clip.append(stem)
+        if "arcface" in rebuild_fields or cached is None or cached.id_emb is None:
+            missing_id.append(stem)
+
+    clip_model = None
+    clip_preprocess = None
+    if missing_clip:
+        import clip as _clip
+
+        log.info("Phase 3: loading CLIP for %d samples with missing CLIP metadata …", len(missing_clip))
+        clip_model, clip_preprocess = _clip.load("ViT-B/32", device=device, jit=False)
+        clip_model.eval()
+
+    if not id_encoder_checkpoint:
+        raise ValueError("id_encoder_checkpoint is required")
+    id_model = None
+    if missing_id:
+        log.info(
+            "Loading ID encoder from %s for %d samples with missing ArcFace metadata …",
+            id_encoder_checkpoint,
+            len(missing_id),
+        )
+        id_model = _load_id_encoder(id_encoder_checkpoint, device)
 
     log.info("Computing embeddings for %d faces (batch_size=%d) …", len(pending), embed_batch_size)
-    emb_map = _compute_embeddings(pending, captions, clip_model, clip_preprocess, id_model, device, embed_batch_size)
+    emb_map = _compute_embeddings(
+        pending,
+        captions,
+        existing,
+        rebuild_fields,
+        clip_model,
+        clip_preprocess,
+        id_model,
+        device,
+        embed_batch_size,
+    )
 
     packed_dir = output_dir / "packed"
     packed_dir.mkdir(exist_ok=True)
@@ -314,7 +460,7 @@ def _run_pack(
 
 
 # ---------------------------------------------------------------------------
-# Standalone packer for existing 3-file datasets
+# Standalone converter for existing img/mask/txt datasets
 # ---------------------------------------------------------------------------
 
 
@@ -324,9 +470,13 @@ def pack_existing(
     id_encoder_checkpoint: str | None = None,
     embed_batch_size: int = 64,
     delete_originals: bool = False,
+    rebuild: list[str] | tuple[str, ...] | None = None,
+    rebuild_all: bool = False,
 ) -> None:
-    """Pack an already-prepared 3-file dataset into the packed/ layout."""
+    """Convert an already-prepared img/mask/txt dataset into the packed/ layout."""
     from glob import glob
+
+    rebuild_fields = _normalize_rebuild_fields(rebuild, rebuild_all)
 
     img_dir = dataset_dir / "img"
     mask_dir = dataset_dir / "mask"
@@ -334,6 +484,10 @@ def pack_existing(
 
     if not img_dir.is_dir():
         sys.exit(f"No img/ directory found under {dataset_dir}")
+    if not txt_dir.is_dir():
+        sys.exit(f"No txt/ directory found under {dataset_dir}; packed PNGs require captions")
+    if not id_encoder_checkpoint:
+        sys.exit("--id-encoder-checkpoint is required so packed PNGs contain ArcFace embeddings")
 
     img_paths = sorted(glob(str(img_dir / "*.png")))
     if not img_paths:
@@ -348,7 +502,7 @@ def pack_existing(
             self.image = bgr
 
     pending = []
-    for p in img_paths:
+    for p in tqdm(img_paths, desc="Loading prepared images", unit="img"):
         stem = Path(p).stem
         bgr = cv2.imread(p)
         if bgr is not None:
@@ -359,6 +513,8 @@ def pack_existing(
         txt_dir=txt_dir,
         mask_dir=mask_dir,
         output_dir=dataset_dir,
+        existing=_load_existing_packed(dataset_dir / "packed"),
+        rebuild_fields=rebuild_fields,
         device=device,
         id_encoder_checkpoint=id_encoder_checkpoint,
         embed_batch_size=embed_batch_size,
@@ -391,7 +547,7 @@ def main(argv: list[str] | None = None) -> None:
         required=True,
         type=Path,
         metavar="DIR",
-        help="Output dataset root (img/, mask/, txt/, packed/ created here)",
+        help="Output dataset root (temporary img/, mask/, txt/ plus packed/ created here)",
     )
     parser.add_argument(
         "--device", default=None, metavar="DEVICE", help="cuda or cpu (default: cuda if available, else cpu)"
@@ -407,7 +563,6 @@ def main(argv: list[str] | None = None) -> None:
         metavar="PATH",
         help="Path to BiSeNet ONNX model (resnet18.onnx or resnet34.onnx)",
     )
-    parser.add_argument("--no-caption", action="store_true", help="Skip caption generation")
     parser.add_argument(
         "--caption-url",
         default="http://localhost:11434/v1",
@@ -426,12 +581,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--caption-timeout", type=float, default=60.0, metavar="SEC", help="Per-request timeout in seconds"
     )
-    # Phase 3 flags
-    parser.add_argument(
-        "--skip-pack", action="store_true", help="Skip Phase 3: do not compute embeddings or create packed/ PNGs"
-    )
     parser.add_argument(
         "--id-encoder-checkpoint",
+        required=True,
         default=None,
         metavar="PATH",
         help="Path to ArcFace checkpoint for ID embedding pre-computation",
@@ -442,6 +594,15 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--delete-originals", action="store_true", help="Delete img/ mask/ txt/ directories after packing"
     )
+    parser.add_argument(
+        "--rebuild",
+        action="append",
+        choices=sorted(_REBUILD_FIELDS),
+        default=[],
+        metavar="FIELD",
+        help="Recompute one cached field; may be passed multiple times",
+    )
+    parser.add_argument("--rebuild-all", action="store_true", help="Recompute caption and all embeddings")
     args = parser.parse_args(argv)
 
     if not args.input.is_dir():
@@ -458,24 +619,24 @@ def main(argv: list[str] | None = None) -> None:
         output_size=args.size,
         largest_only=not args.all_faces,
         skip_mask=args.no_mask,
-        skip_caption=args.no_caption,
         mask_model=args.mask_model,
         caption_url=args.caption_url,
         caption_model=args.caption_model,
         caption_api_key=args.caption_api_key,
         caption_concurrency=args.caption_concurrency,
         caption_timeout=args.caption_timeout,
-        skip_pack=args.skip_pack,
         id_encoder_checkpoint=args.id_encoder_checkpoint,
         embed_batch_size=args.embed_batch_size,
         delete_originals=args.delete_originals,
+        rebuild=args.rebuild,
+        rebuild_all=args.rebuild_all,
     )
 
 
 def pack_main(argv: list[str] | None = None) -> None:
-    """Entry point for alphaface-pack-dataset (existing 3-file datasets)."""
+    """Entry point for alphaface-pack-dataset (migration to packed PNGs)."""
     parser = argparse.ArgumentParser(
-        description="Pack an existing AlphaFace 3-file dataset (img/mask/txt) into packed/ PNGs",
+        description="Convert an existing AlphaFace img/mask/txt dataset into packed/ PNGs",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -491,6 +652,7 @@ def pack_main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--id-encoder-checkpoint",
+        required=True,
         default=None,
         metavar="PATH",
         help="Path to ArcFace checkpoint for ID embedding pre-computation",
@@ -501,6 +663,15 @@ def pack_main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--delete-originals", action="store_true", help="Delete img/ mask/ txt/ directories after packing"
     )
+    parser.add_argument(
+        "--rebuild",
+        action="append",
+        choices=sorted(_REBUILD_FIELDS),
+        default=[],
+        metavar="FIELD",
+        help="Recompute one cached field; may be passed multiple times",
+    )
+    parser.add_argument("--rebuild-all", action="store_true", help="Recompute caption and all embeddings")
     args = parser.parse_args(argv)
 
     if not args.dataset.is_dir():
@@ -516,6 +687,8 @@ def pack_main(argv: list[str] | None = None) -> None:
         id_encoder_checkpoint=args.id_encoder_checkpoint,
         embed_batch_size=args.embed_batch_size,
         delete_originals=args.delete_originals,
+        rebuild=args.rebuild,
+        rebuild_all=args.rebuild_all,
     )
 
 

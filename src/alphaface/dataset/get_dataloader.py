@@ -37,46 +37,6 @@ def synchronized_horizontal_flip_manual(image1: Image.Image, image2: Image.Image
     return image1, image2
 
 
-def load_text_from_file(txt_path: str) -> str:
-    with open(txt_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                return line
-    raise ValueError(f"No non-empty line found in {txt_path}")
-
-
-class FaceImageDatasetImageOnly(Dataset):
-    def __init__(
-        self,
-        db_path: str,
-        t_transform: Callable | None = None,
-        s_transform: Callable | None = None,
-    ) -> None:
-        self.img_list = get_img_list(os.path.join(db_path, "img"))
-        np.random.shuffle(self.img_list)
-        self.t_transform = t_transform
-        self.s_transform = s_transform
-        self.num_sample = len(self.img_list)
-
-    def __len__(self) -> int:
-        return self.num_sample
-
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
-        src_idx = random.randint(0, self.num_sample - 1)
-        tar_idx = random.randint(0, self.num_sample - 1)
-        while src_idx == tar_idx:
-            tar_idx = random.randint(0, self.num_sample - 1)
-
-        src_rgb_img = Image.open(self.img_list[src_idx]).convert("RGB")
-        tar_rgb_img = Image.open(self.img_list[tar_idx]).convert("RGB")
-
-        if self.t_transform is not None and self.s_transform is not None:
-            img1_t = self.t_transform(src_rgb_img)
-            img2_t = self.t_transform(tar_rgb_img)
-        return img1_t, img2_t
-
-
 class FaceImageDatasetClip(Dataset):
     def __init__(
         self,
@@ -84,17 +44,15 @@ class FaceImageDatasetClip(Dataset):
         t_transform: Callable | None = None,
         s_transform: Callable | None = None,
     ) -> None:
-        # Prefer packed/ directory when present; fall back to legacy 3-file layout.
         packed_dir = os.path.join(db_path, "packed")
-        self.use_packed = os.path.isdir(packed_dir) and bool(get_img_list(packed_dir))
+        if not os.path.isdir(packed_dir):
+            raise FileNotFoundError(f"Packed dataset directory not found: {packed_dir}")
 
-        if self.use_packed:
-            self.img_list = get_img_list(packed_dir)
-        else:
-            self.img_list = get_img_list(os.path.join(db_path, "img"))
-            self.mask_path = os.path.join(db_path, "mask")
-            self.text_path = os.path.join(db_path, "txt")
-
+        self.img_list = get_img_list(packed_dir)
+        if not self.img_list:
+            raise FileNotFoundError(f"No packed PNG samples found in {packed_dir}")
+        if len(self.img_list) < 2:
+            raise ValueError(f"Packed training dataset needs at least two samples, found {len(self.img_list)}")
         np.random.shuffle(self.img_list)
         self.t_transform = t_transform
         self.s_transform = s_transform
@@ -109,11 +67,6 @@ class FaceImageDatasetClip(Dataset):
         while src_idx == tar_idx:
             tar_idx = random.randint(0, self.num_sample - 1)
 
-        if self.use_packed:
-            return self._getitem_packed(src_idx, tar_idx)
-        return self._getitem_legacy(src_idx, tar_idx)
-
-    def _getitem_packed(self, src_idx: int, tar_idx: int) -> tuple:
         from ..preprocess.pack_png import unpack_png
 
         src = unpack_png(self.img_list[src_idx])
@@ -142,11 +95,11 @@ class FaceImageDatasetClip(Dataset):
         mask1_t = self.t_transform(src_msk_img)
         mask2_t = self.t_transform(tar_msk_img)
 
-        src_text_str = src.caption or ""
-        tar_text_str = tar.caption or ""
+        src_text_str = src.caption
+        tar_text_str = tar.caption
 
-        def _to_tensor(arr):
-            return torch.from_numpy(arr.copy()) if arr is not None else None
+        def _to_tensor(arr: np.ndarray) -> torch.Tensor:
+            return torch.from_numpy(arr.copy())
 
         return (
             img1_t,
@@ -162,83 +115,6 @@ class FaceImageDatasetClip(Dataset):
             _to_tensor(src.id_emb),
             _to_tensor(tar.id_emb),
         )
-
-    def _getitem_legacy(
-        self, src_idx: int, tar_idx: int
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, str, str]:
-        src_img_path = self.img_list[src_idx]
-        tar_img_path = self.img_list[tar_idx]
-
-        src_rgb_img = Image.open(src_img_path).convert("RGB")
-        tar_rgb_img = Image.open(tar_img_path).convert("RGB")
-
-        src_mask_path = os.path.join(self.mask_path, src_img_path.split("/")[-1])
-        tar_mask_path = os.path.join(self.mask_path, tar_img_path.split("/")[-1])
-
-        src_txt_path = os.path.join(self.text_path, src_img_path.split("/")[-1].split(".")[0] + ".txt")
-        tar_txt_path = os.path.join(self.text_path, tar_img_path.split("/")[-1].split(".")[0] + ".txt")
-
-        src_text_str = load_text_from_file(src_txt_path)
-        tar_text_str = load_text_from_file(tar_txt_path)
-
-        src_msk_img = Image.open(src_mask_path).convert("RGB")
-        tar_msk_img = Image.open(tar_mask_path).convert("RGB")
-
-        src_rgb_img, src_msk_img = synchronized_horizontal_flip_manual(src_rgb_img, src_msk_img)
-        tar_rgb_img, tar_msk_img = synchronized_horizontal_flip_manual(tar_rgb_img, tar_msk_img)
-
-        if self.t_transform is not None and self.s_transform is not None:
-            img1_t = self.t_transform(src_rgb_img)
-            img2_t = self.t_transform(tar_rgb_img)
-            mask1_t = self.t_transform(src_msk_img)
-            mask2_t = self.t_transform(tar_msk_img)
-        return img1_t, img2_t, 1 - mask1_t, 1 - mask2_t, src_text_str, tar_text_str
-
-
-class FaceImageDataset(Dataset):
-    def __init__(
-        self,
-        db_path: str,
-        t_transform: Callable | None = None,
-        s_transform: Callable | None = None,
-    ) -> None:
-        self.img_list = get_img_list(os.path.join(db_path, "img"))
-        self.mask_path = os.path.join(db_path, "mask")
-        np.random.shuffle(self.img_list)
-        self.t_transform = t_transform
-        self.s_transform = s_transform
-        self.num_sample = len(self.img_list)
-
-    def __len__(self) -> int:
-        return self.num_sample
-
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        src_idx = random.randint(0, self.num_sample - 1)
-        tar_idx = random.randint(0, self.num_sample - 1)
-        while src_idx == tar_idx:
-            tar_idx = random.randint(0, self.num_sample - 1)
-
-        src_img_path = self.img_list[src_idx]
-        tar_img_path = self.img_list[tar_idx]
-
-        src_rgb_img = Image.open(src_img_path).convert("RGB")
-        tar_rgb_img = Image.open(tar_img_path).convert("RGB")
-
-        src_mask_path = os.path.join(self.mask_path, src_img_path.split("/")[-1])
-        tar_mask_path = os.path.join(self.mask_path, tar_img_path.split("/")[-1])
-
-        src_msk_img = Image.open(src_mask_path).convert("RGB")
-        tar_msk_img = Image.open(tar_mask_path).convert("RGB")
-
-        src_rgb_img, src_msk_img = synchronized_horizontal_flip_manual(src_rgb_img, src_msk_img)
-        tar_rgb_img, tar_msk_img = synchronized_horizontal_flip_manual(tar_rgb_img, tar_msk_img)
-
-        if self.t_transform is not None and self.s_transform is not None:
-            img1_t = self.t_transform(src_rgb_img)
-            img2_t = self.t_transform(tar_rgb_img)
-            mask1_t = self.t_transform(src_msk_img)
-            mask2_t = self.t_transform(tar_msk_img)
-        return img1_t, img2_t, 1 - mask1_t, 1 - mask2_t
 
 
 def _make_transforms() -> tuple[transforms.Compose, transforms.Compose]:
@@ -259,15 +135,11 @@ def _make_transforms() -> tuple[transforms.Compose, transforms.Compose]:
 
 
 def get_dataloader(db_path: str, batch_size: int, num_workers: int = 4) -> DataLoader:
-    t_transform, s_transform = _make_transforms()
-    train_set = FaceImageDataset(db_path, t_transform=t_transform, s_transform=s_transform)
-    return DataLoader(dataset=train_set, batch_size=batch_size, num_workers=num_workers, shuffle=True)
+    return get_dataloader_clip(db_path, batch_size=batch_size, num_workers=num_workers)
 
 
 def get_dataloader_img_only(db_path: str, batch_size: int, num_workers: int = 4) -> DataLoader:
-    t_transform, s_transform = _make_transforms()
-    train_set = FaceImageDatasetImageOnly(db_path, t_transform=t_transform, s_transform=s_transform)
-    return DataLoader(dataset=train_set, batch_size=batch_size, num_workers=num_workers, shuffle=True)
+    raise NotImplementedError("Image-only training datasets are no longer supported; use packed PNG samples")
 
 
 def get_dataloader_clip(db_path: str, batch_size: int, num_workers: int = 4) -> DataLoader:
@@ -277,6 +149,4 @@ def get_dataloader_clip(db_path: str, batch_size: int, num_workers: int = 4) -> 
 
 
 def get_dataloader_fixed_src_tar(db_path: str, batch_size: int, num_workers: int = 4) -> DataLoader:
-    t_transform, s_transform = _make_transforms()
-    train_set = FaceImageDataset(db_path, t_transform=t_transform, s_transform=s_transform)
-    return DataLoader(dataset=train_set, batch_size=batch_size, num_workers=num_workers, shuffle=True)
+    return get_dataloader_clip(db_path, batch_size=batch_size, num_workers=num_workers)
