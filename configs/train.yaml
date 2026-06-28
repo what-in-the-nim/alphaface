@@ -2,14 +2,14 @@ seed_everything: 2048
 
 trainer:
   max_epochs: 50
-  accelerator: mps
-  # devices: 2
+  accelerator: gpu
+  devices: 1
   precision: 16-mixed
   log_every_n_steps: 100
   logger:
     class_path: pytorch_lightning.loggers.TensorBoardLogger
     init_args:
-      save_dir: ./logs/swap_clip
+      save_dir: ./logs
   callbacks:
     - class_path: pytorch_lightning.callbacks.ModelCheckpoint
       init_args:
@@ -21,49 +21,22 @@ trainer:
 
 model:
   config:
-    network: test1
-    embedding_size: 512
-    momentum: 0.9
     weight_decay: 5e-4
-    batch_size: 8
     init_lr_swapper: 0.01
     init_lr_dis: 0.01
-    verbose: 2000
-    num_epoch: 50
-    warmup_epoch: 0
-    savedir: Save4
-    src_img_size: 112
-    tar_img_size: 256
-    visualize: true
-    from_scretch: false
-    optimizer: adam
-    db_path: ./datasets/new
-    tensorboard: false
-    tb_dir: ./logs/swap_clip
-    adv_sess: 200000
+    optimizer: adamw8bit
     lr_schedule_step: 5
     lr_schedule_gamma: 0.9
-    resume: true
-    model_path: ./models/vit_b_fr_pgair.pt
-    output: ./checkpoints
-    save_interval: 25000
-    use_amp: true
-    use_checkpoint: false
-    num_workers: 8
+    adv_sess: 200000
+    gradient_acc: 2
+    visualize: true
     log_dir: tmp
-    w_id: 10.0
-    w_self_rec: 0.5
-    w_percept: 0.5
-    w_2cycle: 0.5
-    w_mask_rec: 0.5
-    w_clip_id: 1.0
-    w_clip_text: 1.0
-    w_gen_adv: 1.0
+    output: ./checkpoints
   device: auto
 
 data:
   db_path: ./datasets/new
-  batch_size: 8
+  batch_size: 2
   num_workers: 8
 
 # ckpt_path: ./ckpts/experiment
