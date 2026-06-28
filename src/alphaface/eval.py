@@ -1,21 +1,21 @@
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Iterable
 from pathlib import Path
 
-import hydra
 import pytorch_lightning as L
 import torch
 import torchvision.transforms as transforms
-from omegaconf import DictConfig
 from PIL import Image
+from pytorch_lightning.cli import LightningCLI
 from torch.utils.data import DataLoader, Dataset
 
 from .lit_module import AlphaFaceLitModule
 from .models.swapper_alphaface import remap_legacy_swapper_state_dict
 
-CONFIG_DIR = str(Path(__file__).resolve().parents[2] / "configs")
+DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "configs" / "eval.yaml"
 
 
 def list_images(
@@ -64,6 +64,23 @@ class _SwapPairDataset(Dataset):
         return src_file.stem + "_" + tar_file.name
 
 
+class AlphaFaceEvalDataModule(L.LightningDataModule):
+    def __init__(self, src_path: str, tar_path: str, output: str, batch_size: int = 1) -> None:
+        super().__init__()
+        self.src_path = src_path
+        self.tar_path = tar_path
+        self.output = output
+        self.batch_size = batch_size
+        self.dataset: _SwapPairDataset | None = None
+
+    def setup(self, stage: str | None = None) -> None:
+        self.dataset = _SwapPairDataset(list_images(self.src_path), list_images(self.tar_path))
+
+    def predict_dataloader(self) -> DataLoader:
+        assert self.dataset is not None, "call setup() before predict_dataloader()"
+        return DataLoader(self.dataset, batch_size=self.batch_size, shuffle=False)
+
+
 def _save_swapped(tensor: torch.Tensor, path: str) -> None:
     img = tensor
     if img.dim() == 4:
@@ -80,28 +97,42 @@ def _save_swapped(tensor: torch.Tensor, path: str) -> None:
     print(f"Saved image to {path}")
 
 
-@hydra.main(config_path=CONFIG_DIR, config_name="eval", version_base=None)
-def main(cfg: DictConfig) -> None:
-    L.seed_everything(cfg.seed, workers=True)
-    os.makedirs(cfg.log_dir, exist_ok=True)
-    os.makedirs(cfg.output, exist_ok=True)
+def _default_predict_args(args: list[str]) -> list[str]:
+    return args or ["--config", str(DEFAULT_CONFIG)]
+
+
+def main(args: list[str] | None = None) -> None:
+    cli_args = _default_predict_args(list(sys.argv[1:] if args is None else args))
+    if args is None:
+        sys.argv = [sys.argv[0], *cli_args]
+        cli_args = None
+
+    cli = LightningCLI(
+        AlphaFaceLitModule,
+        AlphaFaceEvalDataModule,
+        args=cli_args,
+        run=False,
+        save_config_callback=None,
+        auto_configure_optimizers=False,
+    )
+
+    cfg = cli.model.cfg
+    os.makedirs(getattr(cfg, "log_dir", "tmp"), exist_ok=True)
+    os.makedirs(cli.datamodule.output, exist_ok=True)
 
     print("Preparing the AlphaFace model")
-    model = AlphaFaceLitModule(cfg)
 
     print(f"Resuming from checkpoint... from {cfg.model_path}")
     ckpt = torch.load(cfg.model_path, map_location="cpu")
     state = ckpt.get("swapper", ckpt)
-    model.model.swapper.load_state_dict(remap_legacy_swapper_state_dict(state))
+    cli.model.model.swapper.load_state_dict(remap_legacy_swapper_state_dict(state))
 
-    dataset = _SwapPairDataset(list_images(cfg.src_path), list_images(cfg.tar_path))
-    loader = DataLoader(dataset, batch_size=1, shuffle=False)
-
-    trainer = L.Trainer(accelerator="auto", devices=1, logger=False)
-    outputs = trainer.predict(model, dataloaders=loader)
+    cli.datamodule.setup("predict")
+    assert cli.datamodule.dataset is not None
+    outputs = cli.trainer.predict(cli.model, datamodule=cli.datamodule)
 
     for idx, swapped in enumerate(outputs or []):
-        _save_swapped(swapped, os.path.join(cfg.output, dataset.output_name(idx)))
+        _save_swapped(swapped, os.path.join(cli.datamodule.output, cli.datamodule.dataset.output_name(idx)))
 
 
 if __name__ == "__main__":

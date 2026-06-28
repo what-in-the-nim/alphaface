@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from types import SimpleNamespace
 from typing import Any
 
 import clip
@@ -7,7 +9,6 @@ import pytorch_lightning as L
 import torch
 import torch.nn.functional as F
 import torchvision.transforms as transforms
-from omegaconf import DictConfig
 from torchvision.utils import make_grid
 
 from .models.swapper_alphaface import AlphaFace, build_alpha_face
@@ -21,6 +22,20 @@ from .objectives.loss import (
 )
 
 
+def _select_device() -> str:
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def _config_namespace(config: Any) -> Any:
+    if isinstance(config, Mapping):
+        return SimpleNamespace(**config)
+    return config
+
+
 class AlphaFaceLitModule(L.LightningModule):
     """Lightning wrapper around :class:`AlphaFace` implementing the CLIP-guided GAN loop.
 
@@ -29,13 +44,16 @@ class AlphaFaceLitModule(L.LightningModule):
     are handled here rather than by the Trainer.
     """
 
-    def __init__(self, config: DictConfig, device: str = "cpu") -> None:
+    def __init__(self, config: dict[str, Any], device: str = "auto") -> None:
         super().__init__()
+        if device == "auto":
+            device = _select_device()
         self.automatic_optimization = False
-        self.cfg = config
+        self.cfg = _config_namespace(config)
         self.save_hyperparameters(config)
 
-        self.model: AlphaFace = build_alpha_face(config=config, device=device)
+        print(f"Using device: {device}")
+        self.model: AlphaFace = build_alpha_face(config=self.cfg, device=device)
 
         clip_model, _ = clip.load("ViT-B/32", device=device, jit=False)
         clip_model.eval()
@@ -97,9 +115,18 @@ class AlphaFaceLitModule(L.LightningModule):
         else:
             raise ValueError(f"Unknown optimizer: {cfg.optimizer}")
 
-        scheduler_swapper = torch.optim.lr_scheduler.StepLR(swapper_opt, step_size=cfg.lr_schedule_step, gamma=0.97)
-        scheduler_dis = torch.optim.lr_scheduler.StepLR(dis_opt, step_size=cfg.lr_schedule_step, gamma=0.97)
+        lr_schedule_gamma = getattr(cfg, "lr_schedule_gamma", 0.97)
+        scheduler_swapper = torch.optim.lr_scheduler.StepLR(
+            swapper_opt, step_size=cfg.lr_schedule_step, gamma=lr_schedule_gamma
+        )
+        scheduler_dis = torch.optim.lr_scheduler.StepLR(
+            dis_opt, step_size=cfg.lr_schedule_step, gamma=lr_schedule_gamma
+        )
         return [swapper_opt, dis_opt], [scheduler_swapper, scheduler_dis]
+
+    def on_train_epoch_end(self) -> None:
+        for scheduler in self.lr_schedulers():
+            scheduler.step()
 
     # ------------------------------------------------------------------ training
     def training_step(self, batch: Any, batch_idx: int) -> None:
@@ -187,7 +214,6 @@ class AlphaFaceLitModule(L.LightningModule):
         )
 
         swapper_opt, dis_opt = self.optimizers()
-        sch_swapper, sch_dis = self.lr_schedulers()
         adversarial = self.global_step > cfg.adv_sess
         total_disc_loss = None
         loss_adv_gen = None
@@ -223,13 +249,11 @@ class AlphaFaceLitModule(L.LightningModule):
             self.clip_gradients(swapper_opt, gradient_clip_val=1.0, gradient_clip_algorithm="norm")
             swapper_opt.step()
             swapper_opt.zero_grad(set_to_none=True)
-            sch_swapper.step()
 
             if adversarial:
                 self.clip_gradients(dis_opt, gradient_clip_val=1.0, gradient_clip_algorithm="norm")
                 dis_opt.step()
                 dis_opt.zero_grad(set_to_none=True)
-                sch_dis.step()
 
         # ---- logging ----
         self.log("train/total_gen_loss", total_gen_loss, on_step=True, prog_bar=True)

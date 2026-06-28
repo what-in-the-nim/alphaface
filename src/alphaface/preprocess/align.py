@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 import cv2
 import numpy as np
+from insightface.app import FaceAnalysis
 
 # FFHQ 5-point reference landmarks at 512×512, scaled to target size at call time.
 # Order: left-eye, right-eye, nose-tip, left-mouth, right-mouth.
@@ -62,9 +63,13 @@ class FaceAligner:
         det_size: tuple[int, int] = (640, 640),
         device: str = "cpu",
     ) -> None:
-        from insightface.app import FaceAnalysis
+        if device == "cuda":
+            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        elif device == "mps":
+            providers = ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+        else:
+            providers = ["CPUExecutionProvider"]
 
-        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if device == "cuda" else ["CPUExecutionProvider"]
         self.app = FaceAnalysis(providers=providers)
         self.app.prepare(ctx_id=0 if device == "cuda" else -1, det_size=det_size)
 

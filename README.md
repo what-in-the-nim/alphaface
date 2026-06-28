@@ -12,9 +12,6 @@ The method combines an ArcFace-style identity encoder, an AlphaFace swapper/gene
 configs/
   train.yaml                         Default Lightning training config
   eval.yaml                          Default batch inference/evaluation config
-  experiment/
-    alphaface_train_demo.yaml        Legacy/simple training config values
-    alphaface_eval_demo.yaml         Legacy/simple evaluation config values
 
 src/alphaface/
   train_clip.py                      Lightning training entry point
@@ -258,7 +255,7 @@ During training, the dataloader randomly chooses two different packed samples. O
 
 ## Training
 
-The default training config is `configs/train.yaml`.
+The default training config is a Lightning CLI config at `configs/train.yaml`.
 
 Before training, update the dataset and checkpoint paths:
 

@@ -6,7 +6,6 @@ from pathlib import Path
 import pytorch_lightning as L
 import torch
 import torchvision.transforms as transforms
-from omegaconf import OmegaConf
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 
@@ -49,7 +48,7 @@ def run(
     output: str | Path,
     device: str | None = None,
 ) -> Path:
-    model = AlphaFaceLitModule(OmegaConf.create({"use_checkpoint": False}))
+    model = AlphaFaceLitModule({"use_checkpoint": False}, device=device or "auto")
 
     ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
     state = ckpt.get("swapper", ckpt)
