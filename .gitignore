@@ -36,3 +36,7 @@ env/
 .vscode/
 *.swp
 *.swo
+
+.agents/
+.claude/
+datasets/
