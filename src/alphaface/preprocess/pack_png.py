@@ -115,6 +115,61 @@ def pack_png(
     pil.save(str(out_path), pnginfo=info, optimize=False)
 
 
+def update_png_alpha(path: str | Path, mask: np.ndarray) -> None:
+    """Replace or add the alpha channel of an existing PNG with *mask* (uint8 H×W)."""
+    path = Path(path)
+    pil = Image.open(str(path))
+    meta = dict(pil.text)
+    rgb = np.array(pil.convert("RGB"))
+    rgba = np.dstack([rgb, mask.astype(np.uint8)])
+    pil_out = Image.fromarray(rgba, "RGBA")
+    info = PngImagePlugin.PngInfo()
+    for key, val in meta.items():
+        info.add_itxt(key, val)
+    pil_out.save(str(path), pnginfo=info, optimize=False)
+
+
+def update_png_chunks(
+    path: str | Path,
+    *,
+    force: bool = False,
+    caption: str | None = None,
+    clip_img_emb: np.ndarray | None = None,
+    clip_txt_emb: np.ndarray | None = None,
+    id_emb: np.ndarray | None = None,
+) -> None:
+    """Add or update iTXt metadata chunks in an existing PNG.
+
+    Only writes a chunk when it is absent (or empty), unless *force* is True.
+    The image pixels and alpha channel are preserved unchanged.
+    """
+    path = Path(path)
+    pil = Image.open(str(path))
+    meta = dict(pil.text)
+
+    updates: dict[str, str] = {}
+    if caption is not None:
+        updates["alphaface_caption"] = caption.strip()
+    if clip_img_emb is not None:
+        updates["alphaface_clip_img"] = _enc(_require_embedding("alphaface_clip_img", clip_img_emb))
+    if clip_txt_emb is not None:
+        updates["alphaface_clip_txt"] = _enc(_require_embedding("alphaface_clip_txt", clip_txt_emb))
+    if id_emb is not None:
+        updates["alphaface_id_emb"] = _enc(_require_embedding("alphaface_id_emb", id_emb))
+
+    merged = dict(meta)
+    for key, val in updates.items():
+        if force or key not in merged or not merged[key]:
+            merged[key] = val
+
+    arr = np.array(pil)
+    pil_out = Image.fromarray(arr, pil.mode)
+    info = PngImagePlugin.PngInfo()
+    for key, val in merged.items():
+        info.add_itxt(key, val)
+    pil_out.save(str(path), pnginfo=info, optimize=False)
+
+
 def unpack_png(path: str | Path, *, require_complete: bool = True) -> PackedSample:
     """Load a packed PNG and return a :class:`PackedSample`.
 

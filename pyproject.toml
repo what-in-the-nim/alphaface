@@ -31,10 +31,9 @@ requires = ["uv_build>=0.11.25,<0.12"]
 build-backend = "uv_build"
 
 [project.scripts]
-alphaface-eval = "alphaface.eval:main"
+alphaface = "alphaface.cli:main"
 alphaface-train = "alphaface.train_clip:main"
-alphaface-prepare-dataset = "alphaface.preprocess.prepare_dataset:main"
-alphaface-pack-dataset = "alphaface.preprocess.prepare_dataset:pack_main"
+alphaface-eval = "alphaface.eval:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/alphaface"]
