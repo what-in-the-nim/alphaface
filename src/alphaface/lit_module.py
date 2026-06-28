@@ -112,6 +112,14 @@ class AlphaFaceLitModule(L.LightningModule):
                 swapper_params, lr=cfg.init_lr_swapper, betas=(0.0, 0.99), weight_decay=cfg.weight_decay
             )
             dis_opt = torch.optim.Adam(dis_params, lr=cfg.init_lr_dis, betas=(0.0, 0.99), weight_decay=cfg.weight_decay)
+        elif cfg.optimizer in ("adam8bit", "adamw8bit"):
+            try:
+                import bitsandbytes as bnb
+            except ImportError:
+                raise ImportError("pip install bitsandbytes to use 8-bit optimizers")
+            cls = bnb.optim.AdamW8bit if cfg.optimizer == "adamw8bit" else bnb.optim.Adam8bit
+            swapper_opt = cls(swapper_params, lr=cfg.init_lr_swapper, betas=(0.0, 0.99), weight_decay=cfg.weight_decay)
+            dis_opt = cls(dis_params, lr=cfg.init_lr_dis, betas=(0.0, 0.99), weight_decay=cfg.weight_decay)
         else:
             raise ValueError(f"Unknown optimizer: {cfg.optimizer}")
 
