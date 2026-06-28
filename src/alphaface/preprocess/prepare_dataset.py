@@ -277,7 +277,7 @@ def run(
     txt_dir.mkdir(parents=True, exist_ok=True)
 
     log.info("Loading models on %s …", device)
-    aligner = FaceAligner(device=device)
+    aligner: FaceAligner | None = None
     masker = FaceMasker(model_path=mask_model, device=device) if not skip_mask else None
     captioner = FaceCaptioner(
         base_url=caption_url,
@@ -317,6 +317,10 @@ def run(
                 global_idx += 1
                 align_hits += 1
             continue
+
+        if aligner is None:
+            log.info("Cache miss — loading FaceAligner on %s …", device)
+            aligner = FaceAligner(device=device)
 
         aligned_faces = (
             [aligner.align_largest(bgr, output_size)] if largest_only else aligner.align_all(bgr, output_size)
