@@ -56,8 +56,6 @@ class Swapper(nn.Module):
             else EncoderNoBNIN(self.source_dim, use_checkpoint=use_checkpoint)
         )
         self.decoder = Decoder(1024, 3)
-        self.discriminator: Discriminator | None = None
-        self.train_adv: bool | None = None
 
     def forward(
         self, target: torch.Tensor, source: torch.Tensor, get_latent: bool = False
@@ -137,8 +135,7 @@ def build_alpha_face(
     adv_train: bool = True,
     device: str = "cpu",
 ) -> AlphaFace:
-    use_checkpoint = getattr(config, "use_checkpoint", False) if config is not None else False
-    swapper = Swapper(512, use_checkpoint=use_checkpoint)
+    swapper = Swapper(512, use_checkpoint=True)
     print("Loading pre-trained model for the ID encoder")
     id_encoder: nn.Module = ResNetIdEncoder(ema_path=str(MODELS_DIR / "emp.npy"), device=device)
     id_encoder.resnet.load_state_dict(  # type: ignore[attr-defined]
