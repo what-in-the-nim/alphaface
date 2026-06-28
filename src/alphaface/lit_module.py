@@ -36,6 +36,16 @@ def _config_namespace(config: Any) -> Any:
     return config
 
 
+_W_ID = 10.0
+_W_SELF_REC = 0.5
+_W_PERCEPT = 0.5
+_W_2CYCLE = 0.5
+_W_MASK_REC = 0.5
+_W_CLIP_ID = 1.0
+_W_CLIP_TEXT = 1.0
+_W_GEN_ADV = 1.0
+
+
 class AlphaFaceLitModule(L.LightningModule):
     """Lightning wrapper around :class:`AlphaFace` implementing the CLIP-guided GAN loop.
 
@@ -216,13 +226,13 @@ class AlphaFaceLitModule(L.LightningModule):
         del img1_2_features, img2_1_features, clip_score_1, clip_score_2
 
         base_gen_loss = (
-            cfg.w_id * loss_id
-            + cfg.w_self_rec * loss_self_rec
-            + cfg.w_percept * loss_percept
-            + cfg.w_2cycle * loss_2cycle_rec
-            + cfg.w_mask_rec * loss_masked_recon
-            + cfg.w_clip_id * clip_t_loss_id
-            + cfg.w_clip_text * clip_text2img_loss
+            _W_ID * loss_id
+            + _W_SELF_REC * loss_self_rec
+            + _W_PERCEPT * loss_percept
+            + _W_2CYCLE * loss_2cycle_rec
+            + _W_MASK_REC * loss_masked_recon
+            + _W_CLIP_ID * clip_t_loss_id
+            + _W_CLIP_TEXT * clip_text2img_loss
         )
 
         swapper_opt, dis_opt = self.optimizers()
@@ -244,7 +254,7 @@ class AlphaFaceLitModule(L.LightningModule):
                 disc_gen_output_1_2, is_real=True
             ) + multi_scale_adversarial_loss(disc_gen_output_2_1, is_real=True)
             del disc_gen_output_1_2, disc_gen_output_2_1
-            total_gen_loss = base_gen_loss + cfg.w_gen_adv * loss_adv_gen
+            total_gen_loss = base_gen_loss + _W_GEN_ADV * loss_adv_gen
             self.manual_backward(total_gen_loss / grad_acc)
             for p in model.discriminator.parameters():
                 p.requires_grad_(True)
