@@ -10,16 +10,17 @@ from torch.utils.data import DistributedSampler as _DistributedSampler
 
 def setup_seed(seed, cuda_deterministic=True):
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+        if cuda_deterministic:
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+        else:
+            torch.backends.cudnn.deterministic = False
+            torch.backends.cudnn.benchmark = True
     np.random.seed(seed)
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
-    if cuda_deterministic:  # slower, more reproducible
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-    else:  # faster, less reproducible
-        torch.backends.cudnn.deterministic = False
-        torch.backends.cudnn.benchmark = True
 
 
 def worker_init_fn(worker_id, num_workers, rank, seed):
