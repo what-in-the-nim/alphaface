@@ -89,9 +89,17 @@ class FaceImageDataset_CLIP(Dataset):
         t_transform: Callable | None = None,
         s_transform: Callable | None = None,
     ) -> None:
-        self.img_list = get_img_list(os.path.join(db_path, "img"))
-        self.mask_path = os.path.join(db_path, "mask")
-        self.text_path = os.path.join(db_path, "txt")
+        # Prefer packed/ directory when present; fall back to legacy 3-file layout.
+        packed_dir = os.path.join(db_path, "packed")
+        self.use_packed = os.path.isdir(packed_dir) and bool(get_img_list(packed_dir))
+
+        if self.use_packed:
+            self.img_list = get_img_list(packed_dir)
+        else:
+            self.img_list = get_img_list(os.path.join(db_path, "img"))
+            self.mask_path = os.path.join(db_path, "mask")
+            self.text_path = os.path.join(db_path, "txt")
+
         np.random.shuffle(self.img_list)
         self.t_transform = t_transform
         self.s_transform = s_transform
@@ -100,12 +108,69 @@ class FaceImageDataset_CLIP(Dataset):
     def __len__(self) -> int:
         return self.num_sample
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, str, str]:
+    def __getitem__(self, idx: int):
         src_idx = random.randint(0, self.num_sample - 1)
         tar_idx = random.randint(0, self.num_sample - 1)
         while src_idx == tar_idx:
             tar_idx = random.randint(0, self.num_sample - 1)
 
+        if self.use_packed:
+            return self._getitem_packed(src_idx, tar_idx)
+        return self._getitem_legacy(src_idx, tar_idx)
+
+    def _getitem_packed(self, src_idx: int, tar_idx: int) -> tuple:
+        from ..preprocess.pack_png import unpack_png
+
+        src = unpack_png(self.img_list[src_idx])
+        tar = unpack_png(self.img_list[tar_idx])
+
+        src_rgb_img = Image.fromarray(src.img_rgb)
+        tar_rgb_img = Image.fromarray(tar.img_rgb)
+
+        # mask stored as 0=face, 255=bg — convert to RGB for t_transform consistency
+        src_msk_img = (
+            Image.fromarray(src.mask).convert("RGB")
+            if src.mask is not None
+            else Image.new("RGB", src_rgb_img.size, (255, 255, 255))
+        )
+        tar_msk_img = (
+            Image.fromarray(tar.mask).convert("RGB")
+            if tar.mask is not None
+            else Image.new("RGB", tar_rgb_img.size, (255, 255, 255))
+        )
+
+        src_rgb_img, src_msk_img = synchronized_horizontal_flip_manual(src_rgb_img, src_msk_img)
+        tar_rgb_img, tar_msk_img = synchronized_horizontal_flip_manual(tar_rgb_img, tar_msk_img)
+
+        img1_t = self.t_transform(src_rgb_img)
+        img2_t = self.t_transform(tar_rgb_img)
+        mask1_t = self.t_transform(src_msk_img)
+        mask2_t = self.t_transform(tar_msk_img)
+
+        src_text_str = src.caption or ""
+        tar_text_str = tar.caption or ""
+
+        def _to_tensor(arr):
+            return torch.from_numpy(arr.copy()) if arr is not None else None
+
+        return (
+            img1_t,
+            img2_t,
+            1 - mask1_t,
+            1 - mask2_t,
+            src_text_str,
+            tar_text_str,
+            _to_tensor(src.clip_img_emb),
+            _to_tensor(tar.clip_img_emb),
+            _to_tensor(src.clip_txt_emb),
+            _to_tensor(tar.clip_txt_emb),
+            _to_tensor(src.id_emb),
+            _to_tensor(tar.id_emb),
+        )
+
+    def _getitem_legacy(
+        self, src_idx: int, tar_idx: int
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, str, str]:
         src_img_path = self.img_list[src_idx]
         tar_img_path = self.img_list[tar_idx]
 
