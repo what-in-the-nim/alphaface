@@ -40,3 +40,5 @@ env/
 .agents/
 .claude/
 datasets/
+output/
+models/
