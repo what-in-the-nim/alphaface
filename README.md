@@ -1,5 +1,7 @@
 # AlphaFace
 
+![AlphaFace Architecture](https://arxiv.org/html/2601.16429v1/x2.png)
+
 To run AlphaFace Demo, please conduct the following instruction.
 
 ## Training
