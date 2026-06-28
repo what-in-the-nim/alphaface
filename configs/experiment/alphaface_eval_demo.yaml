@@ -22,10 +22,6 @@ adv_sess: 150000
 lr_schedule_step: 20000
 exp_try_num: 100
 
-# Id encoder
-id_network_path: ./models/vit_b_fr_pgair.pt
-id_network: vit_b
-
 # Checkpoint
 model_path: ./models/alphaface_demo.pt
 output: ./output

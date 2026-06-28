@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import hydra
 import pytorch_lightning as L
@@ -10,6 +11,8 @@ from pytorch_lightning.loggers import TensorBoardLogger, WandbLogger
 
 from .data_module import AlphaFaceDataModule
 from .lit_module import AlphaFaceLitModule
+
+CONFIG_DIR = str(Path(__file__).resolve().parents[2] / "configs")
 
 
 def _select_device() -> str:
@@ -22,7 +25,7 @@ def _select_device() -> str:
     return "cpu"
 
 
-@hydra.main(config_path="configs", config_name="train", version_base=None)
+@hydra.main(config_path=CONFIG_DIR, config_name="train", version_base=None)
 def main(cfg: DictConfig) -> None:
     L.seed_everything(cfg.seed, workers=True)
     os.makedirs(cfg.log_dir, exist_ok=True)

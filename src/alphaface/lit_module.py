@@ -35,7 +35,7 @@ class AlphaFaceLitModule(L.LightningModule):
         self.cfg = config
         self.save_hyperparameters(config)
 
-        self.model: AlphaFace = build_alpha_face(config=config, new_id_model=False, device=device)
+        self.model: AlphaFace = build_alpha_face(config=config, device=device)
 
         clip_model, _ = clip.load("ViT-B/32", device=device, jit=False)
         clip_model.eval()

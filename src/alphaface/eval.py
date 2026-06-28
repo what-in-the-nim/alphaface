@@ -15,6 +15,8 @@ from torch.utils.data import DataLoader, Dataset
 from .lit_module import AlphaFaceLitModule
 from .models.swapper_alphaface import remap_legacy_swapper_state_dict
 
+CONFIG_DIR = str(Path(__file__).resolve().parents[2] / "configs")
+
 
 def list_images(
     directory: str | Path,
@@ -78,7 +80,7 @@ def _save_swapped(tensor: torch.Tensor, path: str) -> None:
     print(f"Saved image to {path}")
 
 
-@hydra.main(config_path="configs", config_name="eval", version_base=None)
+@hydra.main(config_path=CONFIG_DIR, config_name="eval", version_base=None)
 def main(cfg: DictConfig) -> None:
     L.seed_everything(cfg.seed, workers=True)
     os.makedirs(cfg.log_dir, exist_ok=True)

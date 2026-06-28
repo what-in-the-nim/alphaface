@@ -17,7 +17,7 @@ To run AlphaFace Demo, please conduct the following instruction.
 
 1. Download model file from this [link](https://drive.google.com/file/d/18ZOQB3WmIFnMwi1GqBroFFEOuSNKWpZQ/view?usp=sharing) and put it in the project root directory.
 2. Download arcface model from this [link](https://drive.google.com/file/d/1qc4s6eRQPluma72WFibUnw74GPMAYRtY/view?usp=drive_link) and put it in the `models` directory. 
-- You may can change the configuration of model file path (config.model_path) in 'config/alphaface_eval_demo.py'
+- You may can change the model path in `configs/experiment/alphaface_eval_demo.yaml`.
 3. Run `eval.sh`
 
 * We only provide data samples for training and evaluation demo (256 triplets of image, mask, and text)
